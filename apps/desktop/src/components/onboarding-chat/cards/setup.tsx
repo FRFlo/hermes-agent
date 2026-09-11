@@ -1,8 +1,7 @@
 /**
- * The three setup picks — accent, connectors, layout.
- *
- * Picks apply live. The shared catalog keeps cards and previews in agreement
- * without asking the model to enumerate the options.
+ * The three setup cards: accent, connectors, and layout. The accent and layout picks apply as soon as they are
+ * clicked; the connector picks are only recorded. The option lists come from onboarding-chat/options.tsx, so the cards
+ * and the previews stay in agreement without the model listing the options.
  */
 
 import { useStore } from '@nanostores/react'
@@ -185,28 +184,25 @@ export function LookCard({ locked }: CardProps) {
 export function LayoutCard({ locked }: CardProps) {
   const answers = useStore($onboardingAnswers)
   const { commit, done } = useCardCommit()
-  // The stored answer defaults to 'basic', but the CHOICE is the point of this
-  // step — nothing renders selected (and Continue stays off) until they click.
-  // Store-backed: the pick's own layout apply remounts this card (the pane
-  // tree is replaced), so local state would drop the highlight instantly.
+  // The stored answer defaults to 'basic', so nothing renders selected and Continue stays disabled until the user
+  // clicks. The flag lives in a store because applying the picked layout replaces the pane tree and remounts this
+  // card, which would clear local state.
   const picked = useStore($chatLayoutPicked)
 
   const pickLayout = (id: string) => {
     $chatLayoutPicked.set(true)
     setOnboardingAnswers({ layout: id })
 
-    // Live, behind the chat — the panes rearrange as the option is clicked.
     const preset = registry.getArea('layouts').find(contribution => contribution.id === id)
 
     if (!preset?.data) {
       return
     }
 
-    // Every pick goes through assembly, including re-picks. The first grows
-    // the window and places the panes, keeping the chat (and the cursor over
-    // this card) pixel-fixed; later ones re-arrange in place. Swapping just the
-    // preset tree on a re-pick left the previous layout's dismissals and dock
-    // records in force, and the two layouts came up mixed together.
+    // Every pick goes through assembly, including re-picks. The first pick grows the window and places the panes,
+    // holding the chat and the cursor over this card at the same screen position; later picks rearrange in place.
+    // Swapping only the preset tree on a re-pick kept the previous layout's dismissals and dock records, and the two
+    // layouts came up mixed together.
     // SAFETY: Layout presets declare data: LayoutNode (pane-shell/tree/presets.ts).
     assembleChatOnboarding(preset.id, preset.data as LayoutNode)
   }

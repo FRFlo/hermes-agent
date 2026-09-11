@@ -5,9 +5,9 @@ import { IS_MAC } from '@/lib/keybinds/combo'
 import { cn } from '@/lib/utils'
 
 // The gateway decides availability; this list decides presentation order.
-// Chat channels (Discord, Telegram) are how a user talks to Hermes, not apps
-// Hermes reads and acts in for them, so they are not offered here even when
-// the gateway carries them.
+// Chat channels such as Discord and Telegram are how a user talks to Hermes,
+// not apps Hermes reads and acts in for them, so this list omits them even
+// when the gateway lists them.
 interface ConnectorOption {
   homepage?: string
   id: string
@@ -36,10 +36,9 @@ export const CONNECTORS: ConnectorOption[] = [
   return connector
 })
 
-// Big accent swatches, Dia-style. Each seeds `retintTheme` through the accent
-// override, so a click repaints the surface live. Nous blue is the default =
-// no override. Mono seeds the current mode's pole — black in light, white in
-// dark — for a full monochrome look.
+// Each swatch sets the accent override, which `retintTheme` uses to repaint
+// the active skin as soon as the swatch is clicked. Nous blue is the default
+// and sets no override. Mono is black in light mode and white in dark mode.
 export const NOUS_ACCENT = '#0053fd'
 
 export const accentsFor = (dark: boolean): Array<{ hex: string; name: string }> => [
@@ -70,7 +69,7 @@ export function AccentSwatch({
         aria-label={name}
         aria-pressed={active}
         className={cn(
-          // The hairline keeps the mono swatch visible on its own pole.
+          // The border keeps the mono swatch visible when its colour matches the background.
           'size-9 rounded-full border border-foreground/15 transition-transform duration-150',
           !active && 'hover:scale-105'
         )}
@@ -85,13 +84,11 @@ export function AccentSwatch({
   )
 }
 
-// Mini layout trees mirror the basic (BASIC_TREE) and terminal-deck
-// (TERMINAL_TREE) presets registered in app/contrib/controller.tsx, drawn in
-// the layout editor's thumbnail language, upscaled.
+// These mini trees copy the basic (BASIC_TREE) and terminal-deck
+// (TERMINAL_TREE) presets in app/contrib/layout-presets.ts, drawn like the
+// layout editor's thumbnails at a larger size.
 export type MiniNode = 1 | { dir: 'column' | 'row'; children: MiniNode[]; weights: number[] }
 
-/** The power-user layout. Picking it is the most explicit thing a user does
- *  in the whole first run to say how they work. */
 export const ELITE_LAYOUT_ID = 'terminal-deck'
 
 export const LAYOUTS: Array<{ id: string; name: string; tree: MiniNode }> = [
@@ -124,14 +121,9 @@ export function MiniTree({ node }: { node: MiniNode }) {
 }
 
 /**
- * The window buttons on the preview, drawn the way this machine draws them.
- *
- * The card is a picture of the user's own window, so it follows the split
- * `main.ts` already makes when it builds one: macOS gets the traffic lights on
- * the left (`trafficLightPosition`), everywhere else the native controls ride
- * on the right as monochrome glyphs (`titleBarOverlay`). Three coloured dots on
- * a Windows machine is a picture of somebody else's computer — a small tell, in
- * the one moment the app is claiming to show you yours.
+ * The window buttons on the preview, drawn the way this machine draws them, so the card matches the user's own window.
+ * `main.ts` makes the same split: macOS puts the traffic lights on the left (`trafficLightPosition`), every other
+ * platform puts monochrome native controls on the right (`titleBarOverlay`).
  */
 function MiniWindowButtons() {
   if (IS_MAC) {
@@ -144,8 +136,8 @@ function MiniWindowButtons() {
     )
   }
 
-  // Minimize, maximize, close — at 6px the glyphs themselves are mush, so each
-  // is the shape it would be: a bar, a box, and a cross that reads as one.
+  // Minimize, maximize, close. At 6 px the real glyphs are illegible, so each
+  // one is a plain shape: a bar, a box, and a cross.
   return (
     <span aria-hidden className="flex items-center justify-end gap-1.5 text-foreground/40">
       <span className="h-px w-1.5 bg-current" />
