@@ -24,6 +24,7 @@ import {
 import type { LayoutNode } from '@/components/pane-shell/tree/model'
 import { ConnectorLogo } from '@/components/ui/connector-logo'
 import { registry } from '@/contrib/registry'
+import { useI18n } from '@/i18n'
 import type { ConnectorRow } from '@/lib/connector-tools'
 import { requestGatewayForAgent } from '@/store/gateway'
 import { $onboardingAnswers, setOnboardingAnswers } from '@/store/onboarding-answers'
@@ -34,6 +35,7 @@ import { useTheme } from '@/themes'
 import { setAccentOverride } from '@/themes/accent-override'
 
 export function ConnectorsCard({ locked }: CardProps) {
+  const { t } = useI18n()
   const view = useSessionView()
   const storedId = useStore(view.$storedId)
   const runtimeId = useStore(view.$runtimeId)
@@ -117,9 +119,9 @@ export function ConnectorsCard({ locked }: CardProps) {
         }
       }}
     >
-      {catalog === 'loading' ? <p className="text-xs text-muted-foreground">Checking which apps can connect…</p> : null}
+      {catalog === 'loading' ? <p className="text-xs text-muted-foreground">{t.connectors.checkingCatalog}</p> : null}
       {catalog === 'unavailable' ? (
-        <p className="text-xs text-muted-foreground">Connections aren't reachable right now, so this can wait.</p>
+        <p className="text-xs text-muted-foreground">{t.connectors.catalogUnreachable}</p>
       ) : null}
       <fieldset className="grid grid-cols-3 gap-2" disabled={catalog === 'loading' || done}>
         {connectors.map(connector => (
