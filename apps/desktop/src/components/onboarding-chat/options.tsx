@@ -1,29 +1,38 @@
 import { selectableClass } from '@/components/onboarding-chat/chip'
 import { Tip } from '@/components/ui/tooltip'
+import { connectorTitle } from '@/lib/connector-tools'
 import { IS_MAC } from '@/lib/keybinds/combo'
 import { cn } from '@/lib/utils'
 
-// Preferences for the first build’s optional connector offer. The live catalog,
-// not this display list, decides which apps are available to connect. Marks
-// resolve through the shared ConnectorLogo ladder: curated brand glyph first,
-// the product's own favicon, monogram last.
-//
-// Connectors are the apps Hermes reads and acts on FOR the user. Chat channels
-// (Discord, Telegram, WhatsApp) are how a user talks TO Hermes — those live on
-// the Messaging page, and offering them here as if they were data sources
-// taught users the wrong thing about what "connect" does.
-export const CONNECTORS: Array<{ homepage?: string; id: string; name: string }> = [
-  { id: 'gmail', name: 'Gmail' },
-  { id: 'google-calendar', name: 'Calendar' },
-  { id: 'google-drive', name: 'Drive' },
-  { id: 'slack', name: 'Slack' },
-  { id: 'github', name: 'GitHub' },
-  { id: 'notion', name: 'Notion' },
-  { id: 'linear', name: 'Linear' },
-  { id: 'figma', name: 'Figma' },
-  { id: 'spotify', name: 'Spotify' },
-  { id: 'stripe', name: 'Stripe' }
-]
+// The gateway decides availability; this list decides presentation order.
+interface ConnectorOption {
+  homepage?: string
+  id: string
+  name: string
+}
+
+export const CONNECTORS: ConnectorOption[] = [
+  'gmail',
+  'googlecalendar',
+  'googledrive',
+  'googledocs',
+  'slack',
+  'notion',
+  'linear',
+  'jira',
+  'figma',
+  'discord',
+  'todoist',
+  'outlook'
+].map(id => {
+  const connector: ConnectorOption = { id, name: connectorTitle(id) }
+
+  if (id === 'slack') {
+    connector.homepage = 'https://slack.com'
+  }
+
+  return connector
+})
 
 // Big accent swatches, Dia-style. Each seeds `retintTheme` through the accent
 // override, so a click repaints the surface live. Nous blue is the default =

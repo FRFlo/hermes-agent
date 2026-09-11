@@ -6,7 +6,10 @@
  */
 
 import { useStore } from '@nanostores/react'
+import { useEffect, useState } from 'react'
 
+import { useSessionView } from '@/app/chat/session-view'
+import { resolveSessionOwner } from '@/app/session/hooks/use-session-actions/utils'
 import { $chatLayoutPicked, assembleChatOnboarding } from '@/components/onboarding-chat/assembly'
 import { CardFrame, type CardProps, useCardCommit } from '@/components/onboarding-chat/cards/frame'
 import { Chip } from '@/components/onboarding-chat/chip'
@@ -21,14 +24,71 @@ import {
 import type { LayoutNode } from '@/components/pane-shell/tree/model'
 import { ConnectorLogo } from '@/components/ui/connector-logo'
 import { registry } from '@/contrib/registry'
+import type { ConnectorRow } from '@/lib/connector-tools'
+import { requestGatewayForAgent } from '@/store/gateway'
 import { $onboardingAnswers, setOnboardingAnswers } from '@/store/onboarding-answers'
+import { $activeGatewayProfile } from '@/store/profile'
+import { assertSessionOwnerResolved } from '@/store/session-owner-resolution'
+import { isSessionOwnerRoute } from '@/store/session-request-router'
 import { useTheme } from '@/themes'
 import { setAccentOverride } from '@/themes/accent-override'
 
 export function ConnectorsCard({ locked }: CardProps) {
+  const view = useSessionView()
+  const storedId = useStore(view.$storedId)
+  const runtimeId = useStore(view.$runtimeId)
   const answers = useStore($onboardingAnswers)
   const { commit, done } = useCardCommit()
-  const picked = CONNECTORS.filter(connector => answers.connectors.includes(connector.id))
+  const [catalog, setCatalog] = useState<'loading' | 'unavailable' | Set<string>>('loading')
+
+  useEffect(() => {
+    setCatalog('loading')
+
+    if (!storedId || !runtimeId) {
+      return
+    }
+
+    let cancelled = false
+    const ambientProfile = $activeGatewayProfile.get()
+    void resolveSessionOwner(storedId)
+      .then(scope => {
+        assertSessionOwnerResolved(scope, { method: 'connectors.list', sessionId: storedId })
+        const connectionId = isSessionOwnerRoute(scope) ? scope.connectionId : null
+        const profile = isSessionOwnerRoute(scope) ? scope.profile : scope || ambientProfile
+
+        return requestGatewayForAgent<{ available: boolean; connectors: ConnectorRow[] }>(
+          connectionId,
+          profile,
+          'connectors.list',
+          { session_id: runtimeId },
+          45000
+        )
+      })
+      .then(result => {
+        const enabled = new Set(result.connectors.filter(row => row.enabled).map(row => row.connector))
+
+        if (!cancelled) {
+          setCatalog(
+            result.available && CONNECTORS.some(connector => enabled.has(connector.id)) ? enabled : 'unavailable'
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCatalog('unavailable')
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [storedId, runtimeId])
+
+  const connectors = CONNECTORS.filter(
+    connector => catalog === 'loading' || (catalog instanceof Set && catalog.has(connector.id))
+  )
+
+  const picked = connectors.filter(connector => answers.connectors.includes(connector.id))
 
   const toggle = (id: string) =>
     setOnboardingAnswers({
@@ -39,17 +99,30 @@ export function ConnectorsCard({ locked }: CardProps) {
 
   return (
     <CardFrame
-      continueLabel={picked.length > 0 ? `Continue with ${picked.length}` : 'None of these'}
+      continueLabel={
+        catalog === 'unavailable' ? 'Continue' : picked.length > 0 ? `Continue with ${picked.length}` : 'None of these'
+      }
+      disabled={catalog === 'loading'}
       done={done}
       locked={locked}
       onContinue={() => {
-        commit(
-          `apps I use, not connected yet: ${picked.length > 0 ? picked.map(c => c.name).join(', ') : 'none for now'}`
-        )
+        if (
+          commit(
+            catalog === 'unavailable'
+              ? 'apps I use: none for now (connections unreachable)'
+              : `apps I use, not connected yet: ${picked.length > 0 ? picked.map(c => c.name).join(', ') : 'none for now'}`
+          )
+        ) {
+          setOnboardingAnswers({ connectors: picked.map(connector => connector.id) })
+        }
       }}
     >
-      <div className="grid grid-cols-3 gap-2">
-        {CONNECTORS.map(connector => (
+      {catalog === 'loading' ? <p className="text-xs text-muted-foreground">Checking which apps can connect…</p> : null}
+      {catalog === 'unavailable' ? (
+        <p className="text-xs text-muted-foreground">Connections aren't reachable right now, so this can wait.</p>
+      ) : null}
+      <fieldset className="grid grid-cols-3 gap-2" disabled={catalog === 'loading' || done}>
+        {connectors.map(connector => (
           <Chip
             icon={
               <ConnectorLogo
@@ -63,13 +136,12 @@ export function ConnectorsCard({ locked }: CardProps) {
             onToggle={() => toggle(connector.id)}
           />
         ))}
-      </div>
+      </fieldset>
       {/* Picking is a preference, not an authorization: nothing is signed into
-          here. Saying so is what keeps the Connect cards later from reading as
-          a second ask for the same thing. */}
+          here. Saying so keeps the connect step at the start of the first task
+          from reading as a second ask for the same thing. */}
       <p className="text-xs text-muted-foreground">
-        Nothing connects yet. Hermes will offer to link these when a task needs them, and asks before reading
-        anything.
+        Nothing connects yet. Your first task starts by connecting these, and Hermes asks before reading anything.
       </p>
     </CardFrame>
   )
