@@ -115,8 +115,8 @@ moment the flag is off.
 
 #### 1. Secondary profiles must not start their own gateway
 
-With a multiplexer running, a named-profile `hermes gateway start` / `run` is a
-**hard error**, pointing you back at the multiplexer:
+With a multiplexer running, a named-profile `hermes gateway run` refuses to
+start and points you back at the multiplexer:
 
 ```
 The default gateway is running as a profile multiplexer and already serves
@@ -124,10 +124,19 @@ profile 'coder'. ...
 ```
 
 The multiplexer is the single inbound process; a second profile gateway would
-double-bind that profile's platforms. Pass `--force` only if you deliberately
-want a separate process for that profile (not recommended while the multiplexer
-is running). The cross-profile lifecycle wrapper script earlier on this page is
-therefore **not** used in multiplex mode — you only manage the default gateway.
+double-bind that profile's platforms. The refusal exits with code `78`
+(`EX_CONFIG`); the generated systemd unit treats that as permanent
+(`RestartPreventExitStatus=78`), so a managed service for a served profile
+stops instead of restart-looping (launchd's `KeepAlive` still retries every
+30 s — uninstall or stop the service instead). Note that the check lives in
+the foreground `run` path: `hermes -p coder gateway start` / `install`
+themselves do not refuse — the unit they start runs `gateway run`, which then
+exits `78`, and the message lands in the service log rather than your
+terminal. Pass `--force` (a `gateway run` flag only) if you deliberately want
+a separate process for that profile (not recommended while the multiplexer is
+running). The cross-profile lifecycle wrapper script later on this page is
+therefore **not** used in multiplex mode — you only manage the default
+gateway.
 
 #### 2. HTTP-inbound platforms are reached via a `/p/<profile>/` URL prefix
 
@@ -165,6 +174,16 @@ using the default listener's existing credentials.
 
 - `/p/coder/...` API-server requests must use `API_SERVER_KEY` from
   `~/.hermes/profiles/coder/.env`; the default listener key is rejected.
+  Putting that key in a secondary `.env` also auto-enables `api_server` for
+  that profile, which trips the port-binding rule above — pin it off in
+  `profiles/coder/config.yaml` so the key is wired for `/p/coder/` auth
+  without the profile trying to bind its own listener:
+
+  ```yaml
+  platforms:
+    api_server:
+      enabled: false
+  ```
 - A webhook route that targets `coder` must declare `profile: coder` beside
   its existing route-specific `secret` in the default profile's
   `config.yaml`. That secret is then accepted only at
@@ -198,9 +217,14 @@ still aborts gateway startup rather than silently dropping the unsafe profile.
 Polling/connection platforms (Telegram, Discord, Slack, Matrix, Signal, …) work
 fine multiplexed, but each profile that enables one must supply its **own** bot
 token — the same token cannot be polled by two profiles at once. If two profiles
-configure the same `(platform, token)`, startup fails fast naming both profiles
-(see [Token-conflict safety](#token-conflict-safety) — the rule is unchanged,
-it's just enforced inside the one process now).
+configure the same `(platform, token)`, the gateway logs an error naming both
+profiles and parks the **duplicate** adapter (it shows as `fatal /
+duplicate_credential` in runtime status) while the first claimant and every
+other profile keep running — the gateway itself does not exit. The default
+profile's adapters connect first and claim their credentials, so the parked
+adapter is always the secondary's (see
+[Token-conflict safety](#token-conflict-safety) — the rule is unchanged, it's
+just enforced inside the one process now).
 
 #### 4. Session keys are namespaced by profile
 
@@ -213,10 +237,22 @@ migration, no orphaned history.
 #### 5. One PID/lock and one status surface
 
 There is a single process-level PID and lock (the multiplexer, under the default
-home). `hermes status` reports the multiplexer and the profiles it serves;
-`hermes status -p <name>` slices to one profile. Each profile still writes its
-own `runtime_status.json` under its own home, so existing per-profile readers
-keep working.
+home). The multiplexer writes one `gateway_state.json` under the **default**
+home: secondary profiles appear in it as `<profile>:<platform>` platform
+entries plus a `served_profiles` list. Nothing is written under a secondary
+profile's home (there is no per-profile `gateway_state.json` for served
+profiles), so tools that read a named profile's own status file will see it
+as not running. Surfaces that do understand the multiplexer:
+
+- `hermes gateway list` marks each served profile "served by the default
+  multiplexer".
+- `hermes -p <name> gateway status` reports "Gateway is running via the
+  default-profile multiplexer" for a served profile.
+- The dashboard's `/api/status` topology lists the default gateway with its
+  `served_profiles`.
+
+`hermes status` (the general status page) shows only the default gateway
+process; it does not list the profiles the multiplexer serves.
 
 #### What does **not** change
 
@@ -252,6 +288,27 @@ unauthorized-slash operator alert of `P`'s Discord bot (to `P`'s home
 channel). If `P` has no connected bot for that platform the send fails with a
 clear error — it never falls back to the default profile's bot.
 
+#### What is isolated per profile
+
+A quick reference for what a multiplexed turn resolves from **its own**
+profile and never shares with the default or any sibling:
+
+| Concern | Resolved from | Behaviour when the profile lacks it |
+|---|---|---|
+| Provider keys, bot tokens, `${VAR}` refs in `config.yaml` | The profile's own `.env` (its secret scope) | Unresolved / no adapter — never the default profile's value |
+| Authorization (`GATEWAY_ALLOW_ALL_USERS`, `GATEWAY_ALLOWED_USERS`, per-platform allowlists and allow-all opt-ins) | The owning profile's `.env` and `config.yaml` | Closed — a default-profile opt-in never opens a secondary's bot |
+| HTTP endpoints (`/p/<profile>/api/...`, `/p/<profile>/webhooks/...`, platform event callbacks) | The named profile's `API_SERVER_KEY`, `profile:`-bound webhook routes, and its own adapter | `401`/`404`; delivery without an adapter is `502`/`503`, never another profile's bot |
+| `MEDIA:` attachment denylist | Every home under `profiles/` plus the default home, enumerated at check time | A turn can never attach another profile's `.env`, `auth.json`, `state.db`, sessions or token stores |
+| stdio MCP child environment | Safe baseline + the profile's scoped values for secret-source names + the server's own `env:` | A name the profile lacks is absent from the child — no default-profile fallthrough |
+| Outbound egress (`send_message`, shutdown/restart/`/update` notices, `/loop` wakeups, `profile:`-bound webhook delivery, `github_comment` tokens) | The profile's own connected adapter and `.env` | Clear failure; never posts through the default profile's bot |
+| Session namespace | `agent:<profile>:…` (default keeps `agent:main:…`) | Two profiles on the same chat never share history |
+| Logs | `agent.log` / `errors.log` / `gateway.log` under the profile's own home | — |
+| Terminal sandbox settings (`terminal.*`, SSH targets) | The profile's `config.yaml` | Documented default; unparsable config → execution refused |
+
+What is **shared** by design: the process, its PID/lock and `gateway_state.json`
+(default home), the one HTTP listener, and the `profile_routes` table (declared
+on the default profile).
+
 ### Serving selected profiles
 
 By default, `gateway.multiplex_profiles: true` serves every valid named profile
@@ -273,9 +330,23 @@ entries or names that are not installed are skipped with a warning. A malformed
 non-list value fails safely to default-only.
 
 The resulting served set also controls `/p/<profile>/` API and webhook prefixes,
-runtime status, profile-route eligibility, and which profiles the in-process
-cron scheduler ticks. A named profile outside the allowlist may still run its
-own standalone gateway.
+runtime status, profile-route eligibility, and which profiles the gateway's
+in-process cron scheduler ticks. A named profile outside the allowlist may still
+run its own standalone gateway.
+
+Two caveats:
+
+- The served set is a **start-time snapshot**. A profile created or added to
+  the allowlist while the multiplexer is running is not picked up until
+  `hermes gateway restart` (profiles deleted at runtime are dropped from cron
+  ticking automatically).
+- The allowlist governs the **gateway**'s cron ticker only. The cron ticker
+  built into the Desktop app's backend enumerates every local profile
+  regardless of `multiplex_profile_allowlist`; it stands down only for
+  profiles whose own `gateway.pid` is live, and a profile served by the
+  multiplexer has none. If you run the Desktop app on the same host as an
+  allowlisted multiplexer, excluded profiles' cron jobs can still fire from the
+  Desktop backend.
 
 ### Routing shared-bot chats to profiles (`profile_routes`)
 
@@ -341,11 +412,21 @@ the gateway rejects that ingress and logs the route and target. It does not run
 the default profile. Traffic that matches no route keeps the historical
 default-profile behavior.
 
-Cron jobs owned by a routed profile deliver through the shared bot too, but
-only to targets an enabled route with a `chat_id`/`thread_id` maps to that
-profile — a routed profile's job targeting an unrouted chat (or a chat routed
-to another profile) is never sent through the shared bot. Guild-only routes do
-not qualify a cron target; add a `chat_id` route for the delivery channel.
+Cron jobs owned by a routed profile can ride the shared bot too, with two
+preconditions. First, the routed profile must have **no live adapter of its
+own** for that platform — a profile with its own connected bot always delivers
+through it and never through the shared one. Second, the job's target must be
+matched by an **enabled** route to that profile that carries a `chat_id` or
+`thread_id`; a routed profile's job targeting an unrouted chat (or a chat
+routed to another profile) is never sent through the shared bot. Guild-only
+routes do not qualify a cron target — add a `chat_id` route for the delivery
+channel. Cron delivery matches a route on `chat_id`/`thread_id` only and does
+not know the target's guild, so a route that also declares `guild_id` (like
+`acme-support` above) does **not** qualify a cron target: declare a separate
+route for the delivery channel with `platform`, `chat_id` and `profile` but no
+`guild_id`. When neither precondition holds, delivery falls back to the
+profile's standalone send path, which needs that profile's own platform
+credentials in its `.env`.
 
 ## Start, stop, or restart all gateways at once
 
@@ -561,7 +642,10 @@ and reboots.
 
 Each profile must use unique bot tokens for each platform. If two profiles
 share a Telegram, Discord, Slack, WhatsApp, or Signal token, the second
-gateway refuses to start with an error naming the conflicting profile.
+gateway refuses to start with an error naming the conflicting profile. Under
+[multiplexing](#alternative-one-gateway-for-all-profiles-multiplexing) the same
+rule parks only the duplicate profile's adapter and the shared gateway keeps
+running.
 
 To audit:
 
