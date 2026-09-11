@@ -41,15 +41,16 @@ export function ConnectorsCard({ locked }: CardProps) {
   const runtimeId = useStore(view.$runtimeId)
   const answers = useStore($onboardingAnswers)
   const { commit, done } = useCardCommit()
-  const [catalog, setCatalog] = useState<'loading' | 'unavailable' | Set<string>>('loading')
+  const [catalog, setCatalog] = useState<'loading' | 'unavailable' | Set<string>>('unavailable')
 
   useEffect(() => {
-    setCatalog('loading')
-
     if (!storedId || !runtimeId) {
+      setCatalog('unavailable')
+
       return
     }
 
+    setCatalog('loading')
     let cancelled = false
     const ambientProfile = $activeGatewayProfile.get()
     void resolveSessionOwner(storedId)
@@ -63,7 +64,7 @@ export function ConnectorsCard({ locked }: CardProps) {
           profile,
           'connectors.list',
           { session_id: runtimeId },
-          45000
+          15000
         )
       })
       .then(result => {
