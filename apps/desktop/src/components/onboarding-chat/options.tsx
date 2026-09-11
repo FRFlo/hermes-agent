@@ -5,6 +5,9 @@ import { IS_MAC } from '@/lib/keybinds/combo'
 import { cn } from '@/lib/utils'
 
 // The gateway decides availability; this list decides presentation order.
+// Chat channels (Discord, Telegram) are how a user talks to Hermes, not apps
+// Hermes reads and acts in for them, so they are not offered here even when
+// the gateway carries them.
 interface ConnectorOption {
   homepage?: string
   id: string
@@ -21,7 +24,6 @@ export const CONNECTORS: ConnectorOption[] = [
   'linear',
   'jira',
   'figma',
-  'discord',
   'todoist',
   'outlook'
 ].map(id => {
