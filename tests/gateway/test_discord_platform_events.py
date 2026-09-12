@@ -344,6 +344,43 @@ class TestThreadRenamed:
 
 
 class TestRunnerBoundaryIntegration:
+    def test_authorized_edit_rewinds_and_reenters_message_handler(self):
+        """A SessionDB ``target_message`` result must trigger regeneration."""
+        from gateway.run import GatewayRunner
+
+        runner = object.__new__(GatewayRunner)
+        source = SimpleNamespace(
+            chat_id="555", user_id="777", user_name="user", thread_id=None,
+        )
+        db = MagicMock()
+        db.rewind_from_platform_message.return_value = {
+            "target_message": {"id": "456"},
+            "rows": [{"platform_message_id": "789"}],
+        }
+        runner.session_store = SimpleNamespace(
+            lookup_by_session_key=MagicMock(
+                return_value=SimpleNamespace(session_id="session-1"),
+            ),
+            _db=db,
+        )
+        runner._session_key_for_source = MagicMock(return_value="agent:main:555")
+        runner._adapter_for_source = MagicMock(return_value=None)
+        runner._is_user_authorized_for_source = MagicMock(return_value=True)
+        runner._interrupt_and_clear_session = AsyncMock()
+        runner._handle_message = AsyncMock()
+
+        asyncio.run(runner._sync_discord_message_event({
+            "platform": "discord",
+            "event_type": "message_edited",
+            "payload": {"message_id": "456", "text": "edited"},
+        }, source))
+
+        db.rewind_from_platform_message.assert_called_once_with(
+            "session-1", "456", replacement_content="edited",
+        )
+        runner._handle_message.assert_awaited_once()
+        assert runner._handle_message.await_args.args[0].text == "edited"
+
     def test_unauthorized_discord_event_never_reaches_hooks(self):
         """Full path: adapter fire-site -> runner post-auth gate denies."""
         from gateway.run import GatewayRunner

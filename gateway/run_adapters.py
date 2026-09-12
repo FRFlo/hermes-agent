@@ -1430,10 +1430,14 @@ class GatewayAdapterLifecycleMixin:
         is_bot = bool(payload.get("author_is_bot"))
         if not is_bot and not self._is_user_authorized_for_source(source):
             return
-        self._interrupt_running_turn(
-            session_key,
+        # Release the old turn slot as well as interrupting its agent.  Calling only
+        # ``_interrupt_running_turn`` leaves the session marked busy, so the replacement
+        # below is routed through the busy-session handler instead of starting a new turn.
+        await self._interrupt_and_clear_session(
+            session_key, source,
             interrupt_reason="Discord message history changed",
             invalidation_reason="discord_message_mutation",
+            release_running_state=True,
         )
         db = getattr(session_store, "_db", None)
         if db is None:
