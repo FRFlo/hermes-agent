@@ -7,7 +7,10 @@ async def handle(message, adapter) -> None:
         return {"author_id": str(getattr(author, "id", "") or "")[:128] or None}
 
     await adapter._emit_platform_event(
-        "message_deleted", lambda: adapter._message_event_parts(message, extra),
+        "message_deleted",
+        lambda: adapter._message_event_parts(
+            message, extra, include_bot=getattr(adapter, "_platform_event_sync_enabled", False)
+        ),
     )
 
 

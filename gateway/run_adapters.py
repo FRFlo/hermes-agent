@@ -21,6 +21,7 @@ from contextvars import Context
 from datetime import datetime, timedelta, timezone
 from gateway.config import Platform, platform_binds_port as _platform_binds_port
 from gateway.platforms.base import BasePlatformAdapter
+from gateway.platforms.event import MessageEvent
 from gateway.restart import is_global_startup_conflict
 from gateway.run_shutdown import _log_suppressed
 from gateway.session import SessionSource
@@ -1049,6 +1050,8 @@ class GatewayAdapterLifecycleMixin:
             authorization_check or self._make_adapter_auth_check(adapter.platform)
         )
         adapter.set_platform_event_handler(platform_event_handler or self._primary_platform_event_handler())
+        if getattr(adapter, "platform", None) == Platform.DISCORD:
+            adapter._platform_event_sync_enabled = True
         adapter._busy_text_mode = (self._busy_text_mode if busy_text_mode is None else busy_text_mode)
 
     def _configure_profile_adapter(
@@ -1393,12 +1396,90 @@ class GatewayAdapterLifecycleMixin:
         return bool(getattr(self.config, "multiplex_profiles", False))
 
     async def _handle_gateway_platform_event(self, event: dict, source) -> None:
-        """Authorize and publish one normalized adapter event to plugin hooks."""
+        """Apply gateway-owned lifecycle mutations, then publish observer events."""
+        if (
+            isinstance(event, dict)
+            and event.get("platform") == "discord"
+            and event.get("event_type") in {"message_edited", "message_deleted"}
+        ):
+            await self._sync_discord_message_event(event, source)
         # Observer failures must never break the adapter's update loop.
         with _log_suppressed(logging.DEBUG, "gateway_platform_event hook dispatch failed", exc_info=True):
             from hermes_cli.lifecycle import has_hook, invoke_hook
             if has_hook("gateway_platform_event") and self._is_user_authorized_for_source(source):
                 invoke_hook("gateway_platform_event", **event)
+
+    async def _sync_discord_message_event(self, event: dict, source) -> None:
+        """Keep a Discord session aligned with a user-visible edit/delete event.
+
+        This runs before the optional observer hook and deliberately ignores unknown rows.  The transcript
+        mutation is synchronous SQLite work, so it is moved off the Discord event loop; replacement turns
+        re-enter the ordinary admission/agent path after the old generation is invalidated.
+        """
+        payload = event.get("payload") if isinstance(event, dict) else None
+        if not isinstance(payload, dict) or not payload.get("message_id"):
+            return
+        session_key = self._session_key_for_source(source)
+        session_store = getattr(self, "session_store", None)
+        if session_store is None:
+            return
+        entry = session_store.lookup_by_session_key(session_key)
+        if entry is None or not getattr(entry, "session_id", None):
+            return
+        adapter = self._adapter_for_source(source)
+        is_bot = bool(payload.get("author_is_bot"))
+        if not is_bot and not self._is_user_authorized_for_source(source):
+            return
+        self._interrupt_running_turn(
+            session_key,
+            interrupt_reason="Discord message history changed",
+            invalidation_reason="discord_message_mutation",
+        )
+        db = getattr(session_store, "_db", None)
+        if db is None:
+            return
+        message_id = str(payload["message_id"])
+        if is_bot:
+            tracked = getattr(adapter, "_hermes_response_message_ids", {}) if adapter is not None else {}
+            origin_id = next(
+                (origin for (tracked_key, origin), ids in tracked.items()
+                 if tracked_key == str(session_key) and message_id in {str(mid) for mid in ids}),
+                None,
+            )
+            if origin_id is None:
+                origin_id = await asyncio.to_thread(
+                    db.find_discord_response_origin, entry.session_id, message_id,
+                )
+            if origin_id is None:
+                return
+            message_id = origin_id
+        replacement = payload.get("text") if event.get("event_type") == "message_edited" and not is_bot else None
+        result = await asyncio.to_thread(
+            db.rewind_from_platform_message,
+            entry.session_id,
+            message_id,
+            replacement_content=replacement,
+        )
+        if not result.get("target"):
+            return
+        # Known platform IDs are deleted best-effort.  The target was already edited/deleted by Discord;
+        # rows after it include any tracked inbound messages and outbound messages recorded by adapters.
+        if adapter is not None and hasattr(adapter, "delete_message"):
+            ids = [row.get("platform_message_id") for row in result.get("rows", [])]
+            tracked = getattr(adapter, "_hermes_response_message_ids", {}) if adapter is not None else {}
+            for row in result.get("rows", []):
+                origin = row.get("platform_message_id")
+                if origin:
+                    ids.extend(tracked.get((str(session_key), str(origin)), []))
+            for message_id in dict.fromkeys(str(mid) for mid in ids if mid):
+                with suppress(Exception):
+                    await adapter.delete_message(source.chat_id, message_id)
+        if event.get("event_type") == "message_edited" and not is_bot:
+            replacement_event = MessageEvent(
+                text=str(payload.get("text") or ""), user_id=source.user_id, user_name=source.user_name,
+                source=source, message_id=str(payload["message_id"]), raw_message=None,
+            )
+            await self._handle_message(replacement_event)
 
     def _make_profile_platform_event_handler(self, profile_name: str):
         """Bind platform-event auth and hook dispatch to one multiplex profile."""

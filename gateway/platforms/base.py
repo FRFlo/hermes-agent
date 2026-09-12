@@ -3835,6 +3835,11 @@ class BasePlatformAdapter(ABC):
         self, event: MessageEvent, session_key: str, text_content: str, metadata: Dict[str, Any],
         is_ephemeral_response: bool, ephemeral_ttl: int, record_delivery: Callable) -> None:
         """Normal-lane final: the ledger bracket plus the message-id owner's ephemeral delete."""
+        metadata = dict(metadata or {})
+        # Discord uses this internal correlation to remove all fragments of a response when its source
+        # message is edited/deleted.  Other adapters simply ignore the private metadata fields.
+        metadata["_hermes_session_key"] = session_key
+        metadata["_hermes_inbound_message_id"] = event.message_id or getattr(event.source, "message_id", None)
         result, delivery_adapter = await self.send_final_ledgered(
             event, session_key, text_content, metadata,
             reply_to=_reply_anchor_for_event(event), is_ephemeral_response=is_ephemeral_response)

@@ -1230,6 +1230,87 @@ class SessionMessagesMixin:
             "SELECT 1 FROM messages WHERE session_id = ? AND platform_message_id = ? LIMIT 1",
             (session_id, platform_message_id)) is not None
 
+    def rewind_from_platform_message(
+        self, session_id: str, platform_message_id: str, *, replacement_content: Any = None,
+    ) -> Dict[str, Any]:
+        """Archive a platform turn and everything after it, optionally inserting a replacement user turn.
+
+        This is the destructive boundary used by platform message edits/deletes.  It deliberately returns
+        the affected rows so a connector can reconcile its visible messages without a second race-prone
+        transcript read.  ``replacement_content`` is distinguished from ``None`` so deletion can leave no
+        replacement row; the edit path always supplies the edited text (including an empty string).
+        """
+        def _do(conn):
+            self._check_transcript_write_guards(
+                conn, session_id, None, reject_active_turn_lease=True, reject_active_compression_lock=True)
+            target = conn.execute(
+                "SELECT * FROM messages WHERE session_id = ? AND platform_message_id = ? AND active = 1 "
+                "ORDER BY id LIMIT 1", (session_id, str(platform_message_id))).fetchone()
+            if target is None:
+                return {"target": None, "rows": [], "replacement_message_id": None}
+            rows = conn.execute(
+                "SELECT id, role, platform_message_id FROM messages "
+                "WHERE session_id = ? AND active = 1 AND id >= ? ORDER BY id",
+                (session_id, int(target["id"]))).fetchall()
+            ids = [int(row["id"]) for row in rows]
+            if ids:
+                conn.execute(
+                    f"UPDATE messages SET active = 0 WHERE id IN ({_placeholders(ids)})", ids)
+            replacement_id = None
+            if replacement_content is not None:
+                self._insert_message_rows(conn, session_id, [{
+                    "role": "user", "content": replacement_content,
+                    "platform_message_id": str(platform_message_id), "message_id": str(platform_message_id),
+                    "timestamp": time.time(),
+                }])
+                replacement_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            count, tool_calls = self._active_transcript_counts(conn, session_id)
+            conn.execute(f"{_SET_COUNTERS_SQL} WHERE id = ?", (count, tool_calls, session_id))
+            return {
+                "target": dict(target), "rows": [dict(row) for row in rows],
+                "replacement_message_id": replacement_id,
+            }
+        return self._execute_write(_do)
+
+    def record_discord_response_message_ids(
+        self, session_id: str, inbound_message_id: str, message_ids: List[str],
+    ) -> None:
+        """Persist Discord response fragments on the latest assistant row for mutation lookup."""
+        if not session_id or not inbound_message_id or not message_ids:
+            return
+        def _do(conn):
+            row = conn.execute(
+                "SELECT id, display_metadata FROM messages WHERE session_id = ? AND role = 'assistant' "
+                "AND active = 1 ORDER BY id DESC LIMIT 1", (session_id,)).fetchone()
+            if row is None:
+                return
+            metadata = self._decode_display_metadata(row["display_metadata"]) or {}
+            metadata["discord_inbound_message_id"] = str(inbound_message_id)
+            existing = metadata.get("discord_response_message_ids") or []
+            metadata["discord_response_message_ids"] = list(dict.fromkeys(
+                [str(value) for value in existing if value] + [str(value) for value in message_ids]
+            ))
+            conn.execute(
+                "UPDATE messages SET display_metadata = ? WHERE id = ?",
+                (self._encode_display_metadata(metadata), int(row["id"])),
+            )
+        self._execute_write(_do)
+
+    def find_discord_response_origin(self, session_id: str, response_message_id: str) -> Optional[str]:
+        """Return the inbound Discord ID owning a persisted assistant response fragment."""
+        row = self._read_one(
+            "SELECT display_metadata FROM messages WHERE session_id = ? AND role = 'assistant' "
+            "AND json_valid(display_metadata) AND json_type(display_metadata, '$.discord_response_message_ids') = 'array' "
+            "AND EXISTS (SELECT 1 FROM json_each(display_metadata, '$.discord_response_message_ids') "
+            "WHERE CAST(json_each.value AS TEXT) = ?) ORDER BY id DESC LIMIT 1",
+            (session_id, str(response_message_id)),
+        )
+        if row is None:
+            return None
+        metadata = self._decode_display_metadata(row[0]) or {}
+        origin = metadata.get("discord_inbound_message_id")
+        return str(origin) if origin else None
+
     def _is_explicit_fork_child_row(self, session: Dict[str, Any]) -> bool:
         """True when *session* is a branch, delegate, or tool child of its parent. Markers only count when they
         point at ``parent_session_id``: compression copies ``model_config`` onto the continuation, so

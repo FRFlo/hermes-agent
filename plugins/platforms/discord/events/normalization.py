@@ -56,7 +56,7 @@ class EventNormalizationMixin:
 
     async def _emit_platform_event(self, event_type: str, build) -> None:
         """Normalize one event via ``build()`` -> ``(payload, source_kwargs)`` (None drops) and dispatch."""
-        if not self._platform_events_subscribed():
+        if not self._platform_events_subscribed() and not getattr(self, "_platform_event_sync_enabled", False):
             return
         try:
             built = build()
@@ -70,10 +70,10 @@ class EventNormalizationMixin:
             return
         await self._fire_platform_event(event, source)
 
-    def _message_event_parts(self, message, extra_payload):
+    def _message_event_parts(self, message, extra_payload, *, include_bot: bool = False):
         """Shared normalizer for message edit/delete: (payload, source kwargs) or None."""
         author = getattr(message, "author", None)
-        if author is not None and getattr(author, "bot", False):
+        if author is not None and getattr(author, "bot", False) and not include_bot:
             return None  # bot's own progressive edits are noise, not user events
         thread_id, chat_id = self._thread_id_and_chat_for_channel(getattr(message, "channel", None))
         message_id = getattr(message, "id", None)
@@ -84,6 +84,8 @@ class EventNormalizationMixin:
             "chat_id": str(chat_id)[:128], "message_id": str(message_id)[:128],
             "thread_id": thread_id[:128] if thread_id else None, **extra_payload(message, author),
         }
+        if include_bot and getattr(author, "bot", False):
+            payload["author_is_bot"] = bool(getattr(author, "bot", False))
         return payload, dict(
             chat_id=str(chat_id), user_id=str(getattr(author, "id", "") or "") or None,
             user_name=getattr(author, "display_name", None), thread_id=thread_id,

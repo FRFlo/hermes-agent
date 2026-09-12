@@ -132,6 +132,7 @@ class MessagingMixin:
             result = SendResult(success=False, error="Refusing to send empty message")
             # Backfill replays from this table: record the dropped final reply as failed or it is lost.
             return await self._record_response_async(reply_to, result, content, bool(metadata and metadata.get("notify")))
+
         try:
             thread_id = None
             if metadata and metadata.get("thread_id"):
@@ -194,6 +195,21 @@ class MessagingMixin:
                     await self._nonconversational_messages.mark_many(message_ids)
                 elif not _looks_like_nonconversational_history_message(content):
                     self._last_self_message_id[_target_id] = message_ids[-1]
+                session_key = metadata.get("_hermes_session_key") if metadata else None
+                inbound_id = metadata.get("_hermes_inbound_message_id") if metadata else None
+                if session_key and inbound_id:
+                    tracked = getattr(self, "_hermes_response_message_ids", None)
+                    if tracked is None:
+                        tracked = self._hermes_response_message_ids = {}
+                    tracked.setdefault((str(session_key), str(inbound_id)), []).extend(message_ids)
+                    store = getattr(self, "_session_store", None)
+                    entry = store.lookup_by_session_key(str(session_key)) if store is not None else None
+                    db = getattr(store, "_db", None) if entry is not None else None
+                    if db is not None and entry is not None:
+                        await asyncio.to_thread(
+                            db.record_discord_response_message_ids,
+                            entry.session_id, str(inbound_id), message_ids,
+                        )
             # Connection-shaped failure (WS drop / closed session): use the ledger's runtime-retryable
             # marker so the reconnect sweep can replay this final response instead of stranding it until a
             # process restart (#95382 silent partial loss).
@@ -326,6 +342,20 @@ class MessagingMixin:
         return SendResult(
             success=True, message_id=message_id, raw_response={"thread_id": thread_id},
         )
+
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        """Delete one Discord message; reconciliation callers treat this as best effort."""
+        if not self._client:
+            return False
+        try:
+            channel = await self._resolve_channel(chat_id)
+            if not channel:
+                return False
+            await channel.get_partial_message(int(message_id)).delete()
+            return True
+        except Exception as exc:
+            logger.debug("[%s] Failed to delete Discord message %s/%s: %s", self.name, chat_id, message_id, exc)
+            return False
 
     async def edit_message(
         self, chat_id: str, message_id: str, content: str, *, finalize: bool = False,
