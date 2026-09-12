@@ -21,10 +21,28 @@ class ClarifyChoiceView(_HermesView):
     gateway clarify entry immediately; ``Other`` flips to text-capture (next message answers).
     Single-use: after the first valid click all buttons disable."""
 
-    def __init__(self, choices: List[str], clarify_id: str, allowed_user_ids: set, allowed_role_ids: Optional[set] = None):
+    def __init__(self, choices: List[str], clarify_id: str, allowed_user_ids: set, allowed_role_ids: Optional[set] = None,
+                 multi_select: bool = False):
         super().__init__(allowed_user_ids, allowed_role_ids, timeout=_read_discord_prompt_timeout())
         self.choices = list(choices)[:24]
         self.clarify_id = clarify_id
+        self.multi_select = multi_select
+        if multi_select:
+            options = [discord.SelectOption(label=self._button_label(i, c), value=str(i))
+                       for i, c in enumerate(self.choices)]
+            select = discord.ui.Select(
+                placeholder="Choose one or more options...", options=options,
+                min_values=1, max_values=len(options), custom_id=f"clarify:{clarify_id}:multi",
+            )
+            select.callback = self._on_multi_select
+            self.add_item(select)
+            other_btn = discord.ui.Button(
+                label="✏️ Other (type answer)", style=discord.ButtonStyle.secondary,
+                custom_id=f"clarify:{clarify_id}:other",
+            )
+            other_btn.callback = self._on_other
+            self.add_item(other_btn)
+            return
         for index, choice in enumerate(self.choices):
             button = discord.ui.Button(
                 label=self._button_label(index, choice), style=discord.ButtonStyle.primary,
@@ -38,6 +56,26 @@ class ClarifyChoiceView(_HermesView):
         )
         other_btn.callback = self._on_other
         self.add_item(other_btn)
+
+    async def _on_multi_select(self, interaction: "discord.Interaction") -> None:
+        """Resolve a native multi-select as the gateway's canonical JSON list."""
+        if not await self._gate(
+            interaction, resolved_msg="This prompt has already been answered~",
+            unauth_msg="You're not authorized to answer this prompt~",
+        ):
+            return
+        indexes = [int(value) for value in interaction.data.get("values", [])]
+        selected = [self.choices[index] for index in indexes if 0 <= index < len(self.choices)]
+        if not selected:
+            await interaction.response.send_message("Choose at least one option.", ephemeral=True)
+            return
+        import json
+        from tools.clarify_gateway import resolve_gateway_clarify
+        if not resolve_gateway_clarify(self.clarify_id, json.dumps(selected, ensure_ascii=False)):
+            await interaction.response.send_message("This prompt has expired.", ephemeral=True)
+            return
+        display_name = getattr(getattr(interaction, "user", None), "display_name", "user")
+        await self._finish(interaction, discord.Color.green(), f"Answered by {display_name}: {', '.join(selected)}", log_edit_failure=True)
 
     @staticmethod
     def _button_label(index: int, choice: str) -> str:
@@ -75,7 +113,7 @@ class ClarifyChoiceView(_HermesView):
             embed.color = color
             embed.set_footer(text=footer)
         try:
-            await interaction.response.edit_message(embed=embed, view=self)
+            await self._edit_prompt(interaction, embed=embed, view=self)
         except Exception:
             if log_edit_failure:
                 logger.debug("Discord clarify edit_message failed for %s", self.clarify_id, exc_info=True)

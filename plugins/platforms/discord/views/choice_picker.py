@@ -19,13 +19,19 @@ class ChoicePickerView(_HermesView):
         super().__init__(allowed_user_ids, allowed_role_ids, timeout=120)
         self.choices = list(choices)[:_DISCORD_SELECT_MAX_OPTIONS]
         self.on_choice_selected = on_choice_selected
+        self._choice_values = {}
         options = []
-        for choice in self.choices:
+        for index, choice in enumerate(self.choices):
             label = str(choice.get("label") or choice.get("value") or "")
+            raw_value = str(choice.get("value") or "")
+            value = raw_value
+            if len(value) > _DISCORD_SELECT_FIELD_LIMIT:
+                value = f"choice-{index}-{abs(hash(raw_value)) & 0xFFFFFFFF:x}"
+                self._choice_values[value] = raw_value
             options.append(
                 discord.SelectOption(
                     label=_truncate_discord_component_text(label, _DISCORD_SELECT_FIELD_LIMIT),
-                    value=str(choice.get("value") or ""),
+                    value=value,
                     description="current" if choice.get("is_current") else None,
                 )
             )
@@ -42,15 +48,16 @@ class ChoicePickerView(_HermesView):
             return
         self.resolved = True
         value = interaction.data.get("values", [""])[0]
+        value = self._choice_values.get(value, value)
         try:
             result_text = await self.on_choice_selected(str(interaction.channel_id), value)
         except Exception as exc:
             logger.error("Choice picker selection failed: %s", exc)
             result_text = f"Error applying selection: {exc}"
         embed = discord.Embed(description=result_text, color=discord.Color.green())
-        self.clear_items()
+        self._clear_controls()
         self.stop()
-        await interaction.response.edit_message(embed=embed, view=self)
+        await self._edit_prompt(interaction, embed=embed, view=self)
 
     async def on_timeout(self):
         if self.resolved:
@@ -59,7 +66,7 @@ class ChoicePickerView(_HermesView):
         if msg is not None:
             try:
                 embed = discord.Embed(description="⏱ Selection expired — no change made.", color=discord.Color.greyple())
-                self.clear_items()
+                self._clear_controls()
                 await msg.edit(embed=embed, view=self)
             except Exception:
                 pass

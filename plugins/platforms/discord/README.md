@@ -117,12 +117,22 @@ and multi-message responses. Long responses are split safely at Discord's
 message limit. Optional missed-message backfill can recover eligible messages
 after a gateway outage when enabled in the Discord configuration.
 
+New static messages and interactive prompts use Discord Components V2 when the
+installed `discord.py` supports it. Text is rendered with `TextDisplay`,
+structured prompts retain their buttons and menus, and uploaded media is
+explicitly referenced by V2 file components. The adapter falls back to legacy
+content/embeds when the API rejects a V2 payload. Streaming previews, voice
+messages, processing reactions, and messages already created as legacy remain
+on their original transport because Discord makes the V2 flag permanent.
+
 ### Slash commands and interactive views
 
 The plugin registers Hermes slash commands, including session controls,
 model selection, status, help, approvals, and voice controls. Interactive
 buttons and select menus are authorized per user and expire safely when their
-underlying request is no longer active.
+underlying request is no longer active. Clarification prompts support single
+choice, native multi-select, and the existing `Other` path for arbitrary text;
+all variants resolve through the same single-use view lifecycle.
 
 ### Media
 
@@ -130,6 +140,10 @@ Inbound images, documents, audio, and other supported attachments are cached
 and exposed to the agent. Outbound images, files, video, voice, and multiple
 images are uploaded through Discord's attachment API. Local `file://` image
 URLs are supported on Windows and Unix-like systems.
+
+Components V2 media posts reference every uploaded attachment explicitly;
+missing or rejected attachments continue through the existing warning and
+fallback paths.
 
 ### Voice mode
 

@@ -84,7 +84,16 @@ class InteractionsMixin:
             return
         try:
             if followup_msg:
-                await interaction.edit_original_response(content=followup_msg)
+                from ..views.components_v2 import build_text_view
+                view = build_text_view(discord, followup_msg)
+                if view is not None:
+                    try:
+                        await interaction.edit_original_response(view=view)
+                    except Exception:
+                        logger.debug("Discord V2 slash acknowledgement failed; retrying legacy content", exc_info=True)
+                        await interaction.edit_original_response(content=followup_msg)
+                else:
+                    await interaction.edit_original_response(content=followup_msg)
             else:
                 await interaction.delete_original_response()
         except Exception as e:
@@ -310,13 +319,25 @@ class InteractionsMixin:
         if not result.get("success"):
             error = result.get("error", "unknown error")
             if deferred_response:
-                await interaction.followup.send(f"Failed to create thread: {error}", ephemeral=True)
+                text = f"Failed to create thread: {error}"
+                from ..views.components_v2 import build_text_view
+                view = build_text_view(discord, text)
+                try:
+                    await interaction.followup.send(view=view, ephemeral=True) if view else await interaction.followup.send(text, ephemeral=True)
+                except Exception:
+                    await interaction.followup.send(text, ephemeral=True)
             return
         thread_id = result.get("thread_id")
         thread_name = result.get("thread_name") or name
         link = f"<#{thread_id}>" if thread_id else f"**{thread_name}**"
         if deferred_response:
-            await interaction.followup.send(f"Created thread {link}", ephemeral=True)
+            text = f"Created thread {link}"
+            from ..views.components_v2 import build_text_view
+            view = build_text_view(discord, text)
+            try:
+                await interaction.followup.send(view=view, ephemeral=True) if view else await interaction.followup.send(text, ephemeral=True)
+            except Exception:
+                await interaction.followup.send(text, ephemeral=True)
         # Track thread participation so follow-ups don't require @mention
         if thread_id:
             self._threads.mark(thread_id)
@@ -673,12 +694,21 @@ class InteractionsMixin:
             # 5 buttons × 5 rows = 25; one slot is reserved for "Other".
             clean_choices = [s for s in (_flatten_choice(c) for c in (choices or [])) if s][:24]
             if clean_choices:
-                hint = "Pick one below, or click ✏️ Other to type a custom answer."
+                multi_select = False
+                try:
+                    from tools import clarify_gateway as _clarify_gateway
+                    with _clarify_gateway._lock:
+                        multi_select = bool(getattr(_clarify_gateway._entries.get(clarify_id), "multi_select", False))
+                except Exception:
+                    pass
+                hint = ("Pick one or more below, or click ✏️ Other to type a custom answer."
+                        if multi_select else "Pick one below, or click ✏️ Other to type a custom answer.")
                 embed.add_field(name="Choices", value=hint, inline=False)
                 view = _view("ClarifyChoiceView")(
                     choices=clean_choices, clarify_id=clarify_id,
                     allowed_user_ids=self._allowed_user_ids,
                     allowed_role_ids=self._allowed_role_ids,
+                    multi_select=multi_select,
                 )
             else:
                 hint = "Reply in this channel with your answer."

@@ -24,11 +24,21 @@ class ExecApprovalView(_HermesView):
         self.session_key = session_key
         self.require_admin = require_admin
         self.admin_user_ids = {str(a).strip() for a in (admin_user_ids or set()) if str(a).strip()}
+        self._add_control("allow_once", "Allow Once", discord.ButtonStyle.green, self.allow_once)
+        self._add_control("allow_session", "Allow Session", discord.ButtonStyle.grey, self.allow_session)
+        self._add_control("allow_always", "Always Allow", discord.ButtonStyle.blurple, self.allow_always)
+        self._add_control("deny", "Deny", discord.ButtonStyle.red, self.deny)
         if smart_denied or not allow_session:
             self.remove_item(self.allow_session)
             self.remove_item(self.allow_always)
         elif not allow_permanent:
             self.remove_item(self.allow_always)
+
+    def _add_control(self, name, label, style, callback):
+        button = discord.ui.Button(label=label, style=style, custom_id=f"exec_{name}")
+        button.callback = callback
+        setattr(self, name, button)
+        self.add_item(button)
 
     def _check_auth(self, interaction: discord.Interaction) -> bool:
         """Base admission always required; with ``require_admin`` the clicker must
@@ -80,18 +90,14 @@ class ExecApprovalView(_HermesView):
         await self._finalize_embed(
             interaction, color, f"{label} by {interaction.user.display_name}" if count else label)
 
-    @discord.ui.button(label="Allow Once", style=discord.ButtonStyle.green)
     async def allow_once(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._resolve(interaction, "once", discord.Color.green(), "Approved once")
 
-    @discord.ui.button(label="Allow Session", style=discord.ButtonStyle.grey)
     async def allow_session(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._resolve(interaction, "session", discord.Color.blue(), "Approved for session")
 
-    @discord.ui.button(label="Always Allow", style=discord.ButtonStyle.blurple)
     async def allow_always(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._resolve(interaction, "always", discord.Color.purple(), "Approved permanently")
 
-    @discord.ui.button(label="Deny", style=discord.ButtonStyle.red)
     async def deny(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._resolve(interaction, "deny", discord.Color.red(), "Denied")

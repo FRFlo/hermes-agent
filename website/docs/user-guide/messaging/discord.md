@@ -25,6 +25,22 @@ Before setup, here's the part most people want to know: how Hermes behaves once 
 If you want a normal bot-help channel where people can talk to Hermes without tagging it every time, add that channel to `DISCORD_FREE_RESPONSE_CHANNELS`.
 :::
 
+### Components V2
+
+When supported by the installed `discord.py`, Hermes renders new static
+messages and interactive prompts with Discord Components V2. Prompt text uses
+`TextDisplay`, controls remain authorized buttons or select menus, and media
+attachments are explicitly referenced by V2 file components. If Discord or the
+local library cannot accept a V2 payload, Hermes retries with the legacy
+content/embed format. Streaming previews, voice messages, processing reactions,
+and messages already created as legacy intentionally keep their original
+transport because Discord makes the V2 flag permanent.
+
+Clarification prompts can use a single-choice menu, a native multi-select menu,
+or `Other` for an arbitrary typed response. Approvals and confirmations share
+the same authorization, single-use, expiration, and finalization lifecycle
+while keeping their separate backend resolvers.
+
 ### Discord Gateway Model
 
 Hermes on Discord is not a webhook that replies statelessly. It runs through the full messaging gateway, which means each incoming message goes through:

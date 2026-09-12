@@ -25,6 +25,18 @@ Hermes Agent 以机器人形式与 Discord 集成，让你可以通过私信或�
 如果你想要一个普通的机器人帮助频道，让用户无需每次都 @标记就能与 Hermes 对话，请将该频道添加到 `DISCORD_FREE_RESPONSE_CHANNELS`。
 :::
 
+### Components V2
+
+如果已安装的 `discord.py` 支持，Hermes 会使用 Discord Components V2
+渲染新的静态消息和交互式提示。提示文本使用 `TextDisplay`，按钮和选择菜单
+仍会执行原有的授权检查，媒体附件也会通过 V2 文件组件显式引用。如果 Discord
+或本地库拒绝 V2 payload，Hermes 会自动重试传统的 content/embed 格式。流式预览、
+语音消息、处理状态 reaction，以及已经创建的传统消息会继续使用原有传输方式，
+因为 Discord 的 V2 标志一旦设置就无法撤销。
+
+澄清提示支持单选菜单、原生多选菜单，以及通过 `Other` 输入任意文本。批准和确认
+提示共享相同的授权、单次使用、过期和完成生命周期，但仍保留各自独立的后端解析器。
+
 ### Discord Gateway（网关）模型
 
 Hermes 在 Discord 上不是无状态回复的 webhook（网络钩子）。它通过完整的消息网关运行，这意味着每条传入消息都会经过：

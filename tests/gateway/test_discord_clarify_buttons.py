@@ -85,6 +85,24 @@ def _make_interaction(*, user_id="42", display_name="Tester", roles=None,
 class TestClarifyChoiceViewConstruction:
     """The view should build numeric buttons plus an Other button."""
 
+    def test_multi_select_renders_select_and_resolves_json_array(self):
+        from tools import clarify_gateway
+        clarify_gateway.register("multi-cid", "session", "Pick", ["alpha", "beta"], multi_select=True)
+        view = ClarifyChoiceView(
+            choices=["alpha", "beta"], clarify_id="multi-cid", allowed_user_ids={"42"},
+            multi_select=True,
+        )
+        assert len(view.children) == 2
+        assert view.children[0].options[0].value == "0"
+        interaction = _make_interaction()
+        interaction.data = {"values": ["0", "1"]}
+        import asyncio
+        asyncio.run(view.children[0].callback(interaction))
+        with clarify_gateway._lock:
+            entry = clarify_gateway._entries["multi-cid"]
+            assert entry.response == '["alpha", "beta"]'
+        _clear_clarify_state()
+
 
     def test_truncates_long_choice_label(self):
         long_choice = "x" * 200

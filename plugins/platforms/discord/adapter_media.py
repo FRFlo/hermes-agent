@@ -44,7 +44,16 @@ class DiscordMediaMixin:
                 channel, content=(caption or "").strip(), files=[discord_file],
             )
             return result
-        msg = await channel.send(content=caption if caption else None, files=[discord_file])
+        from plugins.platforms.discord.views.components_v2 import build_media_view
+        v2_view = build_media_view(discord, caption or "", [discord_file])
+        if v2_view is not None:
+            try:
+                msg = await channel.send(view=v2_view, files=[discord_file])
+            except Exception:
+                logger.debug("[%s] Components V2 file send failed; retrying legacy payload", self.name, exc_info=True)
+                msg = await channel.send(content=caption if caption else None, files=[discord_file])
+        else:
+            msg = await channel.send(content=caption if caption else None, files=[discord_file])
         attachments = getattr(msg, "attachments", None) or []
         if not attachments:
             # Discord accepted the message but attached nothing: fail loud instead of a silent drop.
@@ -151,7 +160,16 @@ class DiscordMediaMixin:
                         channel, content=(content or "").strip(), files=files,
                     )
                 else:
-                    await channel.send(content=content, files=files)
+                    from plugins.platforms.discord.views.components_v2 import build_media_view
+                    v2_view = build_media_view(_discord_mod, content or "", files)
+                    if v2_view is not None:
+                        try:
+                            await channel.send(view=v2_view, files=files)
+                        except Exception:
+                            logger.debug("[%s] Components V2 image send failed; retrying legacy payload", self.name, exc_info=True)
+                            await channel.send(content=content, files=files)
+                    else:
+                        await channel.send(content=content, files=files)
                 delivered = True
             except Exception as e:
                 logger.warning(
@@ -290,7 +308,16 @@ class DiscordMediaMixin:
                 file = discord.File(io.BytesIO(data), filename=filename_for(headers))
                 if self._is_forum_parent(channel):
                     return await self._forum_post_file(channel, content=(caption or "").strip(), file=file)
-                msg = await channel.send(content=caption if caption else None, file=file)
+                from plugins.platforms.discord.views.components_v2 import build_media_view
+                v2_view = build_media_view(discord, caption or "", [file])
+                if v2_view is not None:
+                    try:
+                        msg = await channel.send(view=v2_view, files=[file])
+                    except Exception:
+                        logger.debug("[%s] Components V2 media send failed; retrying legacy payload", self.name, exc_info=True)
+                        msg = await channel.send(content=caption if caption else None, file=file)
+                else:
+                    msg = await channel.send(content=caption if caption else None, file=file)
                 return SendResult(success=True, message_id=str(msg.id))
         except ImportError:
             logger.warning("[%s] aiohttp not installed, falling back to URL. Run: pip install aiohttp", self.name, exc_info=True)

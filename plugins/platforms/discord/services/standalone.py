@@ -28,10 +28,6 @@ def _remember_channel_is_forum(chat_id: str, is_forum: bool) -> None:
 
 
 def _standalone_sanitize_error(text) -> str:
-    s = str(text)
-    import re
-    return re.sub(r"(Authorization:\s*Bot\s+)\S+", r"\1***", s, flags=re.IGNORECASE)
-def _standalone_sanitize_error(text) -> str:
     """Local copy of tools.send_message_tool._sanitize_error_text (strips bot tokens); avoids hard dep."""
     s = str(text)
     import re as _re_san
@@ -110,6 +106,16 @@ def _standalone_warn_missing_media(media_path: str) -> str:
     warning = f"Media file not found, skipping: {media_path}"
     logger.warning(warning)
     return warning
+
+
+def _components_v2_payload(text: str, *, attachments: Optional[list] = None) -> dict:
+    """Return a Discord Components V2 message payload for REST delivery."""
+    components = []
+    if text:
+        components.append({"type": 10, "content": str(text)})
+    for attachment in attachments or []:
+        components.append({"type": 13, "file": {"url": f"attachment://{attachment}"}, "spoiler": False})
+    return {"flags": 32768, "components": components}
 
 
 async def _standalone_response_json_or_error(resp: Any, error_prefix: str):
@@ -197,7 +203,10 @@ async def _standalone_send(
                             {"id": str(idx), "filename": os.path.basename(path)}
                             for idx, path in enumerate(valid_media)
                         ]
-                        starter_message = {"content": (caption or message), "attachments": attachments_meta}
+                        starter_message = {
+                            **_components_v2_payload(caption or message, attachments=[os.path.basename(p) for p in valid_media]),
+                            "attachments": attachments_meta,
+                        }
                         payload_json = json.dumps({"name": thread_name, "message": starter_message})
                         form = aiohttp.FormData()
                         form.add_field("payload_json", payload_json, content_type="application/json")
@@ -211,18 +220,45 @@ async def _standalone_send(
                             async with session.post(thread_url, headers=auth_headers, data=form, **_req_kw) as resp:
                                 data, err = await _standalone_response_json_or_error(resp, "Discord forum thread creation error")
                                 if err:
-                                    return err
+                                    logger.debug("Discord V2 forum upload rejected; retrying legacy payload")
+                                    legacy_form = aiohttp.FormData()
+                                    legacy_form.add_field(
+                                        "payload_json", json.dumps({
+                                            "name": thread_name,
+                                            "message": {"content": caption or message},
+                                        }), content_type="application/json",
+                                    )
+                                    for idx, media_path in enumerate(valid_media):
+                                        with open(media_path, "rb") as fh:
+                                            legacy_form.add_field(
+                                                f"files[{idx}]", fh.read(), filename=os.path.basename(media_path),
+                                            )
+                                    async with session.post(thread_url, headers=auth_headers, data=legacy_form, **_req_kw) as retry_resp:
+                                        data, retry_err = await _standalone_response_json_or_error(
+                                            retry_resp, "Discord forum thread creation error",
+                                        )
+                                        if retry_err:
+                                            return retry_err
                         except Exception as e:
                             return {"error": _standalone_sanitize_error(f"Discord forum thread upload failed: {e}")}
                     else:
                         # No media: JSON POST creates the thread with the text starter.
                         async with session.post(
                             thread_url, headers=json_headers,
-                            json={"name": thread_name, "message": {"content": message}}, **_req_kw,
+                            json={"name": thread_name, "message": _components_v2_payload(message)}, **_req_kw,
                         ) as resp:
                             data, err = await _standalone_response_json_or_error(resp, "Discord forum thread creation error")
                             if err:
-                                return err
+                                logger.debug("Discord V2 forum text rejected; retrying legacy payload")
+                                async with session.post(
+                                    thread_url, headers=json_headers,
+                                    json={"name": thread_name, "message": {"content": message}}, **_req_kw,
+                                ) as retry_resp:
+                                    data, retry_err = await _standalone_response_json_or_error(
+                                        retry_resp, "Discord forum thread creation error",
+                                    )
+                                    if retry_err:
+                                        return retry_err
                 thread_id_created = data.get("id")
                 starter_msg_id = (data.get("message") or {}).get("id", thread_id_created)
                 result = {
@@ -235,10 +271,14 @@ async def _standalone_send(
             url = f"https://discord.com/api/v10/channels/{chat_id}/messages"
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30), **_sess_kw) as session:
             if message.strip() or not media_files:
-                async with session.post(url, headers=json_headers, json={"content": message}, **_req_kw) as resp:
+                async with session.post(url, headers=json_headers, json=_components_v2_payload(message), **_req_kw) as resp:
                     last_data, err = await _standalone_response_json_or_error(resp, "Discord API error")
                     if err:
-                        return err
+                        logger.debug("Discord V2 message rejected; retrying legacy content payload")
+                        async with session.post(url, headers=json_headers, json={"content": message}, **_req_kw) as retry_resp:
+                            last_data, retry_err = await _standalone_response_json_or_error(retry_resp, "Discord API error")
+                            if retry_err:
+                                return retry_err
             # One multipart upload per file; a MEDIA:<path> caption rides as the attachment message's
             # content, and caption_pending makes a missing file fall back to a plain message.
             caption_pending = bool(caption)
@@ -248,7 +288,7 @@ async def _standalone_send(
                     if caption_pending:
                         try:
                             async with session.post(
-                                url, headers=json_headers, json={"content": caption}, **_req_kw,
+                                url, headers=json_headers, json=_components_v2_payload(caption), **_req_kw,
                             ) as resp:
                                 if resp.status in {200, 201}:
                                     last_data = await _standalone_read_json_limited(
@@ -261,11 +301,11 @@ async def _standalone_send(
                 try:
                     form = aiohttp.FormData()
                     filename = os.path.basename(media_path)
+                    form.add_field(
+                        "payload_json", json.dumps(_components_v2_payload(caption if caption_pending else "", attachments=[filename])),
+                        content_type="application/json",
+                    )
                     if caption_pending:
-                        form.add_field(
-                            "payload_json", json.dumps({"content": caption}),
-                            content_type="application/json",
-                        )
                         caption_pending = False
                     with open(media_path, "rb") as f:
                         form.add_field("files[0]", f, filename=filename)

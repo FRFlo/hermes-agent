@@ -30,6 +30,7 @@ class ModelPickerView(_HermesView):
         self.on_model_selected = on_model_selected
         self._selected_provider: str = ""
         self._pending_expensive_model: str = ""
+        self._model_values: dict[str, str] = {}
         self._build_provider_select()
 
     def _add_button(self, label: str, style, custom_id: str, callback) -> None:
@@ -44,13 +45,14 @@ class ModelPickerView(_HermesView):
 
     async def _edit(self, interaction: discord.Interaction, description: str, *, view=..., **embed_kw) -> None:
         """Edit the picker message in place with a config embed (``view`` defaults to self)."""
-        await interaction.response.edit_message(
-            embed=self._config_embed(description, **embed_kw), view=self if view is ... else view,
+        await self._edit_prompt(
+            interaction, embed=self._config_embed(description, **embed_kw),
+            view=self if view is ... else view,
         )
 
     def _build_provider_select(self):
         """Build the provider dropdown menu."""
-        self.clear_items()
+        self._clear_controls()
         options = []
         for p in self.providers:
             count = p.get("total_models", len(p.get("models", [])))
@@ -70,13 +72,14 @@ class ModelPickerView(_HermesView):
         """Model dropdown(s) for one provider.
         Select caps at 25 options and View at 5 rows (2 reserved for Back/Cancel), so models are
         partitioned across up to 3 selects (75) rather than truncated (tail entries would vanish)."""
-        self.clear_items()
+        self._clear_controls()
         provider = next((p for p in self.providers if p["slug"] == provider_slug), None)
         if not provider:
             return
         models = provider.get("models", [])
         if not models:
             return
+        self._model_values.clear()
         chunks = [
             models[i : i + _DISCORD_SELECT_MAX_OPTIONS]
             for i in range(0, len(models), _DISCORD_SELECT_MAX_OPTIONS)
@@ -86,9 +89,9 @@ class ModelPickerView(_HermesView):
             options = [
                 discord.SelectOption(
                     label=_truncate_discord_component_text(model_id.split("/")[-1], _DISCORD_SELECT_FIELD_LIMIT),
-                    value=_truncate_discord_component_text(model_id, _DISCORD_SELECT_FIELD_LIMIT),
+                    value=self._component_model_value(model_id, idx),
                 )
-                for model_id in chunk
+                for idx, model_id in enumerate(chunk)
             ]
             suffix = f" ({idx + 1}/{len(chunks)})" if len(chunks) > 1 else ""
             self._add_select(
@@ -96,9 +99,20 @@ class ModelPickerView(_HermesView):
         self._add_button("◀ Back", discord.ButtonStyle.grey, "model_back", self._on_back)
         self._add_button("Cancel", discord.ButtonStyle.red, "model_cancel2", self._on_cancel)
 
+    def _component_model_value(self, model_id: str, index: int) -> str:
+        """Keep the Discord value under 100 characters without losing model identity."""
+        if len(model_id) <= _DISCORD_SELECT_FIELD_LIMIT:
+            return model_id
+        value = f"model-{index}-{abs(hash(model_id)) & 0xFFFFFFFF:x}"
+        self._model_values[value] = model_id
+        return value
+
     def _build_expensive_confirm(self, model_id: str):
         """Build confirmation buttons for unusually expensive models."""
-        self.clear_items()
+        self._clear_controls()
+        # The provider/model selection was only an intermediate step; the
+        # newly rendered confirmation needs its own atomic click claim.
+        self._interaction_claimed = False
         self._pending_expensive_model = model_id
         self._add_button("Switch anyway", discord.ButtonStyle.red, "model_expensive_confirm", self._on_expensive_confirm)
         self._add_button("Cancel", discord.ButtonStyle.grey, "model_expensive_cancel", self._on_cancel)
@@ -128,31 +142,35 @@ class ModelPickerView(_HermesView):
         extra = f"\n*{total - shown} more available — type `/model <name>` directly*" if total > shown else ""
         await self._edit(interaction, f"Provider: **{pname}**\nSelect a model:{extra}")
 
-    async def _switch_selected_model(self, interaction: discord.Interaction, model_id: str):
-        if not await self._gate(interaction, resolved_msg="Already resolved~", unauth_msg="You're not authorized~"):
+    async def _switch_selected_model(self, interaction: discord.Interaction, model_id: str, *, already_claimed: bool = False):
+        if not already_claimed and not await self._gate(
+            interaction, resolved_msg="Already resolved~", unauth_msg="You're not authorized~"
+        ):
             return
         self.resolved = True
-        self.clear_items()
+        self._clear_controls()
         await self._edit(interaction, f"Switching to `{model_id}`...", title="⚙ Switching Model", view=None)
         try:
             result_text = await self.on_model_selected(str(interaction.channel_id), model_id, self._selected_provider)
         except Exception as exc:
             result_text = f"Error switching model: {exc}"
-        await interaction.edit_original_response(
-            embed=self._config_embed(result_text, title="⚙ Model Switched", color=discord.Color.green()),
-            view=None,
-        )
+        embed = self._config_embed(result_text, title="⚙ Model Switched", color=discord.Color.green())
+        if self._set_v2_text(result_text):
+            await interaction.edit_original_response(view=self)
+        else:
+            await interaction.edit_original_response(embed=embed, view=None)
 
     async def _on_model_selected(self, interaction: discord.Interaction):
         if not await self._gate(interaction, resolved_msg="Already resolved~", unauth_msg="You're not authorized~"):
             return
-        model_id = interaction.data["values"][0]
+        selected_value = interaction.data["values"][0]
+        model_id = self._model_values.get(selected_value, selected_value)
         warning = await self._expensive_warning_for(model_id)
         if warning is not None:
             self._build_expensive_confirm(model_id)
             await self._edit(interaction, warning.message, title=f"⚠ {warning.title}", color=discord.Color.red())
             return
-        await self._switch_selected_model(interaction, model_id)
+        await self._switch_selected_model(interaction, model_id, already_claimed=True)
 
     async def _on_expensive_confirm(self, interaction: discord.Interaction):
         if not await self._gate(interaction, resolved_msg=None, unauth_msg="You're not authorized~"):
@@ -160,7 +178,7 @@ class ModelPickerView(_HermesView):
         if not self._pending_expensive_model:
             await interaction.response.send_message("Model selection expired.", ephemeral=True)
             return
-        await self._switch_selected_model(interaction, self._pending_expensive_model)
+        await self._switch_selected_model(interaction, self._pending_expensive_model, already_claimed=True)
 
     async def _on_back(self, interaction: discord.Interaction):
         if not await self._gate(interaction, resolved_msg=None, unauth_msg="You're not authorized~"):
@@ -177,17 +195,22 @@ class ModelPickerView(_HermesView):
         )
 
     async def _on_cancel(self, interaction: discord.Interaction):
+        if not await self._gate(interaction, resolved_msg="Already resolved~", unauth_msg="You're not authorized~"):
+            return
         self.resolved = True
-        self.clear_items()
+        self._clear_controls()
         await self._edit(interaction, "Model selection cancelled.", color=discord.Color.greyple())
 
     async def on_timeout(self):
         self.resolved = True
-        self.clear_items()
+        self._clear_controls()
         msg = self._message
         if msg:
             try:
                 embed = self._config_embed("⏱ Selection expired — no model change.", color=discord.Color.greyple())
-                await msg.edit(embed=embed, view=self)
+                if self._set_v2_text(embed.description or ""):
+                    await msg.edit(view=self)
+                else:
+                    await msg.edit(embed=embed, view=self)
             except Exception:
                 pass

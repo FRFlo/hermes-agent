@@ -1,9 +1,9 @@
 """Discord standalone MEDIA:<path> caption delivery.
 
 When `hermes send --to discord "MEDIA:/x.png This Caption"` targets a normal
-(non-forum) channel, the caption must ride on the media message content rather
-than being posted as a separate message before the attachment. The Discord REST
-calls are mocked at the aiohttp.ClientSession boundary.
+(non-forum) channel, the caption must ride on the media message rather than
+being posted as a separate message before the attachment. Discord Components
+V2 carries the caption in a TextDisplay. Calls are mocked at aiohttp's boundary.
 """
 
 import asyncio
@@ -67,7 +67,7 @@ def _tmpfile(suffix):
 
 
 def _payload_json_content(form_data):
-    """Extract the 'content' from a FormData's payload_json field, if any."""
+    """Extract the V2 TextDisplay content from a FormData payload."""
     for field in getattr(form_data, "_fields", []):
         # aiohttp FormData stores (type_options_dict, headers, value)
         try:
@@ -76,7 +76,8 @@ def _payload_json_content(form_data):
         except (IndexError, TypeError):
             continue
         if type_opts.get("name") == "payload_json":
-            return json.loads(value).get("content")
+            payload = json.loads(value)
+            return next((c.get("content") for c in payload.get("components", []) if c.get("type") == 10), None)
     return None
 
 
@@ -127,7 +128,8 @@ def test_no_caption_non_forum_keeps_separate_text():
         assert res["success"] is True
         # Two POSTs: the text content message, then the media upload.
         assert len(calls) == 2
-        assert calls[0][1] == {"content": "hello"}
+        assert calls[0][1]["flags"] == 32768
+        assert calls[0][1]["components"] == [{"type": 10, "content": "hello"}]
         assert calls[1][0].endswith("/messages")
     finally:
         os.unlink(img)
