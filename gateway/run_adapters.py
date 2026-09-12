@@ -1460,7 +1460,11 @@ class GatewayAdapterLifecycleMixin:
             message_id,
             replacement_content=replacement,
         )
-        if not result.get("target"):
+        # SessionDB returns the affected row as ``target_message``.  Checking
+        # the old name made every edit/delete silently stop here: the
+        # transcript was never reconciled, Discord replies were left behind,
+        # and edited messages were never dispatched again.
+        if not result.get("target_message"):
             return
         # Known platform IDs are deleted best-effort.  The target was already edited/deleted by Discord;
         # rows after it include any tracked inbound messages and outbound messages recorded by adapters.

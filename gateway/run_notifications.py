@@ -350,6 +350,11 @@ class GatewayNotificationsMixin:
                     try:
                         _edit_res = await adapter.edit_message(
                             chat_id=source.chat_id, message_id=_sc_msg_id, content=text_content, finalize=True,
+                            metadata={
+                                **(metadata or {}),
+                                "_hermes_session_key": session_key,
+                                "_hermes_inbound_message_id": inbound_message_id,
+                            },
                         )
                         if getattr(_edit_res, "success", False):
                             _reconciled = True

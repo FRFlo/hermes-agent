@@ -2839,7 +2839,8 @@ class GatewayTurnMixin:
         return metadata
 
     def _run_agent_progress_threading(
-        self, source: SessionSource, event_message_id: Optional[str], _native_slack_task_cards: bool
+        self, source: SessionSource, event_message_id: Optional[str], _native_slack_task_cards: bool,
+        session_key: Optional[str] = None,
     ) -> Tuple[Optional[dict], Optional[str], Optional[dict]]:
         """Resolve where progress bubbles are threaded (platform-specific).
 
@@ -2881,6 +2882,13 @@ class GatewayTurnMixin:
             ),
             platform=source.platform,
         )
+        # The Discord adapter may seal a streamed response by editing its
+        # placeholder.  Preserve the same identity metadata used by direct
+        # final sends so that edit-based finals can receive actions and be
+        # reconciled on later message mutations as well.
+        _progress_metadata = dict(_progress_metadata or {})
+        _progress_metadata["_hermes_session_key"] = session_key
+        _progress_metadata["_hermes_inbound_message_id"] = event_message_id
         if _native_slack_task_cards:
             # chat.startStream in channels requires the recipient team/user pair; harmless elsewhere.
             _progress_metadata = dict(_progress_metadata or {})
@@ -3783,7 +3791,9 @@ class GatewayTurnMixin:
         ``turn_ctx`` (the one-slot holders shared with run_sync's executor thread are TurnContext
         defaults). Returns ``_status_thread_metadata``."""
         turn_ctx._progress_metadata, turn_ctx._progress_reply_to, _status_thread_metadata = (
-            self._run_agent_progress_threading(source, event_message_id, _native_slack_task_cards)
+            self._run_agent_progress_threading(
+                source, event_message_id, _native_slack_task_cards, session_key,
+            )
         )
         # Bridges: sync step/event/status callbacks → async hooks.emit and adapter.send.
         turn_ctx._loop_for_step = asyncio.get_running_loop()
