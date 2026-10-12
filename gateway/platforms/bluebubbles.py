@@ -387,7 +387,7 @@ class BlueBubblesAdapter(BasePlatformAdapter):
     async def _send_attachment(self, chat_id: str, file_path: str, filename: Optional[str] = None,
                                caption: Optional[str] = None, is_audio_message: bool = False,
                                reply_to: Optional[str] = None,
-                               metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+                               metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send a file attachment via BlueBubbles multipart upload."""
         if not self.client:
             return SendResult(success=False, error="Not connected")

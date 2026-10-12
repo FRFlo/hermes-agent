@@ -353,6 +353,7 @@ class TestSend:
 
     @pytest.mark.asyncio
     async def test_send_voice_sends_caption_and_downgrade_note(self):
+        from gateway.platforms.base import SendResult
         from plugins.platforms.wecom.adapter import WeComAdapter
 
         adapter = WeComAdapter(PlatformConfig(enabled=True))

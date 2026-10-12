@@ -2430,7 +2430,7 @@ class SlackAdapter(BasePlatformAdapter):
                 message_id, chat_id, api_error or "none", e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
-    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[dict[str, Any]] = None) -> bool:
         """Delete a bot message (used to clean up temporary progress bubbles)."""
         if not self._app:
             return False

@@ -3228,7 +3228,7 @@ class DiscordAdapter(DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceIn
         """Reactions enabled via ``extra.reactions`` (YAML, per profile) or ``DISCORD_REACTIONS``."""
         return self._extra_or_env_flag("reactions", "DISCORD_REACTIONS", "true", truthy=False)
 
-    async def on_processing_start(self, event: MessageEvent, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata: Optional[dict[str, Any]] = None) -> None:
         """Add an in-progress reaction and record durable handling state."""
         message = event.raw_message
         acked = False
@@ -3236,7 +3236,7 @@ class DiscordAdapter(DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceIn
             acked = await self._call_processing_operation(self._add_reaction, message, "👀", metadata=metadata)
         await asyncio.to_thread(self._record_discord_processing_start, event, emoji_ack=acked)
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome, metadata: Optional[dict[str, Any]] = None) -> None:
         """Swap the in-progress reaction for final reaction and durable state."""
         await asyncio.to_thread(self._record_discord_processing_complete, event, outcome)
         if not self._reactions_enabled():

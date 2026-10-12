@@ -1470,7 +1470,7 @@ class MatrixAdapter(BasePlatformAdapter):
     async def stop_typing(self, chat_id: str, metadata=None) -> None:
         await self._set_typing(chat_id, 0)
 
-    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         formatted = self.format_message(content)
         new_content = self._build_text_message_content(formatted)
         msg_content: dict[str, Any] = {"msgtype": "m.text", "body": f"* {formatted}", "m.new_content": new_content}

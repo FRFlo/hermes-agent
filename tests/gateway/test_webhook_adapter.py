@@ -892,7 +892,7 @@ class TestDeliverCrossPlatformThreadId:
         }
         await adapter._deliver_cross_platform("telegram", "hello", delivery)
         mock_target.send.assert_awaited_once_with(
-            "12345", "hello", metadata={"thread_id": "999"}
+            "12345", "hello", metadata={"thread_id": "999", "message_type": "notification"}
         )
 
 

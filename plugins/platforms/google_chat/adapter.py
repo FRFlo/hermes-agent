@@ -1137,7 +1137,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
             return result
         return await super().send_clarify(chat_id, question, choices, clarify_id, session_key, metadata)
 
-    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Edit via ``messages.patch`` (required by the tool-progress / token-streaming
         pipeline). ``finalize`` is unused: Chat's patch has no streaming lifecycle.
         404/403 are non-success so the gateway falls back to ``send()``."""
@@ -1155,7 +1155,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
             logger.debug("[GoogleChat] edit_message failed", exc_info=True)
             return SendResult(success=False, error=str(exc))
 
-    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[dict[str, Any]] = None) -> bool:
         """Delete a message. Prefer ``edit_message`` — deletion leaves a "Message
         deleted by its author" tombstone; kept for stream-consumer fallback paths."""
         if not message_id:

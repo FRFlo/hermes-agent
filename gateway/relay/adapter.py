@@ -1641,7 +1641,7 @@ class RelayAdapter(BasePlatformAdapter):
         )
 
     async def delete_message(
-        self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None,
+        self, chat_id: str, message_id: str, *, metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Delete a relayed message (the stream consumer's fresh-final cleanup). Gated
         on the descriptor advertising ``delete``: older connectors return False so
@@ -2299,7 +2299,7 @@ class RelayAdapter(BasePlatformAdapter):
         emoji: str,
         *,
         remove: bool = False,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> bool:
         """Egress one `react` op; best-effort (False on any failure, logged at debug)."""
         if not chat_id or not message_id:

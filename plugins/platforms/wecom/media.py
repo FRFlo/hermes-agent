@@ -291,7 +291,7 @@ class WeComMediaMixin:
 
     async def _send_followup_markdown(
         self, chat_id: str, content: str, reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> Optional[SendResult]:
         if not content:
             return None
@@ -305,7 +305,7 @@ class WeComMediaMixin:
     async def _send_media_source(
         self, chat_id: str, media_source: str, caption: Optional[str] = None,
         file_name: Optional[str] = None, reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> SendResult:
         if not chat_id:
             return SendResult(success=False, error="chat_id is required")

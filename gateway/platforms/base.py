@@ -2747,14 +2747,14 @@ class BasePlatformAdapter(ABC):
         return None
 
     async def edit_message(
-        self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Edit a sent message (optional: success=False makes callers send anew). ``finalize`` marks
         the last edit of a streamed response; surfaces with a distinct "in progress" state (DingTalk
         AI Cards) close the message on it and set ``REQUIRES_EDIT_FINALIZE`` so it's routed even
         when content is unchanged."""
         return SendResult(success=False, error="Not supported")
 
-    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[dict[str, Any]] = None) -> bool:
         """Delete a sent message; True on success (platforms without a deletion API return False and
         callers leave it). Used by the stream consumer's fresh-final cleanup to remove stale
         previews.
@@ -2772,7 +2772,7 @@ class BasePlatformAdapter(ABC):
             lambda: int(_config_section("display").get("ephemeral_system_ttl", 0)), 0)
 
     def _schedule_ephemeral_delete(
-        self, chat_id: str, message_id: str, ttl_seconds: int, metadata: Optional[Dict[str, Any]] = None,
+        self, chat_id: str, message_id: str, ttl_seconds: int, metadata: Optional[dict[str, Any]] = None,
     ) -> None:
         """Spawn a detached task that deletes ``message_id`` after ``ttl_seconds``; best-effort
         (gateway restart, permission denied, Telegram 48h window) swallowed at debug level."""
@@ -3551,12 +3551,12 @@ class BasePlatformAdapter(ABC):
     _OK_EMOJI: Optional[str] = None
     _FAIL_EMOJI: Optional[str] = None
 
-    async def on_processing_start(self, event: MessageEvent, metadata: Optional[Dict[str, Any]] = None) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata: Optional[dict[str, Any]] = None) -> None:
         """Hook called when background processing begins."""
 
     async def on_processing_complete(
         self, event: MessageEvent, outcome: ProcessingOutcome,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> None:
         """Hook called when background processing completes. Default: opt-in reaction ack — with
         ``_OK_EMOJI``/``_FAIL_EMOJI`` set and ``_add_reaction``/``_remove_reaction`` present, swap

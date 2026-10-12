@@ -861,7 +861,7 @@ class BuzzAdapter(BasePlatformAdapter):
             logger.debug("Buzz: reaction add failed for message %s in %s — %s", message_id[:12], chat_id, _cli_error_message(err, code))
         return code == 0
 
-    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Edit a sent message (streamed replies). The CLI reports a NEW event id but the stream consumer
         keeps addressing the original, so return the given id, never the CLI's."""
         if not message_id:
@@ -880,7 +880,7 @@ class BuzzAdapter(BasePlatformAdapter):
             self._mark_seen(str(chat_id), str(data["event_id"]))
         return SendResult(success=bool(data.get("accepted", True)), message_id=str(message_id), raw_response=data)
 
-    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None) -> bool:
+    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[dict[str, Any]] = None) -> bool:
         """Delete a sent message (stream consumer's fresh-final cleanup path)."""
         if not message_id:
             return False
