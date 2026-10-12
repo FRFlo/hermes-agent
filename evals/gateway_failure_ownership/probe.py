@@ -6,8 +6,14 @@ from types import SimpleNamespace
 ROOT = Path(sys.argv[1]).resolve()
 RECEIPT = Path(sys.argv[2]).resolve()
 HOME = Path(tempfile.mkdtemp(prefix="hermes-104653-state-"))
-# Discard inherited credentials/config, preserve only interpreter essentials.
-keep = {k: v for k, v in os.environ.items() if k in ("PATH", "LANG", "LC_ALL", "TZ")}
+# Discard inherited credentials/config, but retain the host variables required
+# by native Windows Python for SSL, socket, and tempfile initialization.
+keep_vars = {"PATH", "LANG", "LC_ALL", "TZ"}
+if os.name == "nt":
+    keep_vars.update(
+        {"HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "SYSTEMROOT", "TEMP", "TMP"}
+    )
+keep = {k: v for k, v in os.environ.items() if k in keep_vars}
 os.environ.clear()
 os.environ.update(keep)
 os.environ.update(
@@ -19,6 +25,11 @@ os.environ.update(
     HERMES_DISABLE_LAZY_INSTALLS="1",
     NO_PROXY="127.0.0.1,localhost",
 )
+if os.name == "nt":
+    # Native Windows pathlib resolves Path.home() from USERPROFILE, not HOME.
+    # The probe clears inherited location variables, so point it at the same
+    # isolated state directory rather than letting imports fall back to host state.
+    os.environ["USERPROFILE"] = str(HOME)
 sys.path.insert(0, str(ROOT))
 os.chdir(HOME)
 (HOME / "config.yaml").write_text(
