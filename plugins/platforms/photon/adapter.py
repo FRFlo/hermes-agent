@@ -1324,7 +1324,7 @@ class PhotonAdapter(BasePlatformAdapter):
         self._typing_last_sent[chat_id] = now
         await self._sidecar_try("/typing", {"spaceId": chat_id, "state": "start"}, "send_typing")
 
-    async def stop_typing(self, chat_id: str) -> None:
+    async def stop_typing(self, chat_id: str, metadata=None) -> None:
         self._typing_last_sent.pop(chat_id, None)
         await self._sidecar_try("/typing", {"spaceId": chat_id, "state": "stop"}, "stop_typing")
 
@@ -1407,14 +1407,14 @@ class PhotonAdapter(BasePlatformAdapter):
             return {"success": False, "error": "unreact failed (see gateway debug log)"}
         return {"success": True, "message_id": target}
 
-    async def on_processing_start(self, event: MessageEvent) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata=None) -> None:
         """Tapback 👀 on the triggering message while the agent works."""
         if not self._reactions_enabled():
             return
         chat_id = getattr(event.source, "chat_id", None)
         message_id = getattr(event, "message_id", None)
         if chat_id and message_id:
-            await self._add_reaction(chat_id, message_id, "\U0001f440")
+            await self._call_processing_operation(self._add_reaction, chat_id, message_id, "\U0001f440", metadata=metadata)
 
     # base.on_processing_complete swaps 👀 for 👍/👎 (remove-then-add keeps the sidecar's
     # reaction-handle slot coherent); CANCELLED leaves it unreacted.

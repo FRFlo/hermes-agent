@@ -7,6 +7,8 @@ for GatewayRunner (mixin bound via the MRO).
 
 from __future__ import annotations
 
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
+
 import logging
 from typing import TYPE_CHECKING
 import asyncio
@@ -498,7 +500,9 @@ class GatewayBusySessionMixin:
         await adapter._send_with_retry(
             chat_id=event.source.chat_id, content=content,
             reply_to=reply_anchor if plain_anchor else self._busy_reply_to(event, reply_anchor),
-            metadata=self._thread_metadata_for_source(event.source, reply_anchor),
+            metadata=with_message_type(
+                self._thread_metadata_for_source(event.source, reply_anchor), OutboundMessageType.REPLY,
+            ),
         )
 
     async def _send_busy_drain_notice(self, event: MessageEvent, session_key: str, effective_mode: str) -> None:
@@ -939,7 +943,8 @@ class GatewayBusySessionMixin:
             adapter = self._delivery_adapter_for(source)
             if adapter:
                 await adapter.send(
-                    str(source.chat_id), text, metadata=self._thread_metadata_for_source(source)
+                    str(source.chat_id), text,
+                    metadata=with_message_type(self._thread_metadata_for_source(source), OutboundMessageType.INTERACTION),
                 )
         except Exception:
             logger.debug("%s ack send failed", label, exc_info=True)
@@ -1372,7 +1377,10 @@ class GatewayBusySessionMixin:
         _slash_confirm_mod.register(session_key, confirm_id, command, handler)
 
         adapter = self._delivery_adapter_for(source)
-        metadata = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))
+        metadata = with_message_type(
+            self._thread_metadata_for_source(source, self._reply_anchor_for_event(event)),
+            OutboundMessageType.INTERACTION,
+        )
 
         if adapter is not None:
             try:

@@ -24,6 +24,7 @@ from utils import normalize_proxy_url
 from agent.i18n import t
 from agent.retry_utils import jittered_backoff
 from agent.proxy_bypass import first_proxy_env_value, should_bypass_proxy as _should_bypass_proxy
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 
 logger = logging.getLogger(__name__)
 
@@ -2746,14 +2747,14 @@ class BasePlatformAdapter(ABC):
         return None
 
     async def edit_message(
-        self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
+        self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Edit a sent message (optional: success=False makes callers send anew). ``finalize`` marks
         the last edit of a streamed response; surfaces with a distinct "in progress" state (DingTalk
         AI Cards) close the message on it and set ``REQUIRES_EDIT_FINALIZE`` so it's routed even
         when content is unchanged."""
         return SendResult(success=False, error="Not supported")
 
-    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """Delete a sent message; True on success (platforms without a deletion API return False and
         callers leave it). Used by the stream consumer's fresh-final cleanup to remove stale
         previews.
@@ -2770,13 +2771,23 @@ class BasePlatformAdapter(ABC):
         return _or_default(
             lambda: int(_config_section("display").get("ephemeral_system_ttl", 0)), 0)
 
-    def _schedule_ephemeral_delete(self, chat_id: str, message_id: str, ttl_seconds: int) -> None:
+    def _schedule_ephemeral_delete(
+        self, chat_id: str, message_id: str, ttl_seconds: int, metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Spawn a detached task that deletes ``message_id`` after ``ttl_seconds``; best-effort
         (gateway restart, permission denied, Telegram 48h window) swallowed at debug level."""
         async def _run_delete() -> None:
             try:
                 await asyncio.sleep(max(1, int(ttl_seconds)))
-                await self.delete_message(chat_id=chat_id, message_id=message_id)
+                delete_kwargs = {}
+                try:
+                    params = inspect.signature(self.delete_message).parameters
+                    if "metadata" in params or any(
+                        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()):
+                        delete_kwargs["metadata"] = metadata
+                except (TypeError, ValueError):
+                    pass
+                await self.delete_message(chat_id=chat_id, message_id=message_id, **delete_kwargs)
             except Exception as e:
                 logger.debug("[%s] Ephemeral delete failed for %s/%s: %s", self.name, chat_id, message_id, e)
         coro = _run_delete()
@@ -2948,6 +2959,7 @@ class BasePlatformAdapter(ABC):
         ``mark_awaiting_text``. Adapters whose prompt is a persistent card MAY define
         ``async retire_clarify_card(clarify_id, notice)``; the gateway calls it when the clarify
         ends without a click (timeout, session reset, superseding free prose)."""
+        metadata = with_message_type(metadata, OutboundMessageType.INTERACTION)
         if choices:
             # Multi-select flag lives on the pending entry (signature stays adapter-compatible).
             try:
@@ -2975,8 +2987,10 @@ class BasePlatformAdapter(ABC):
 
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         """Send a typing indicator; ``metadata`` carries platform context (Slack thread_id)."""
+        from gateway.outbound_messages import MessageType, with_message_type
+        metadata = with_message_type(metadata, MessageType.PROGRESS)
 
-    async def stop_typing(self, chat_id: str) -> None:
+    async def stop_typing(self, chat_id: str, metadata=None) -> None:
         """Stop a persistent typing indicator; override where typing runs as a loop."""
 
     @staticmethod
@@ -2994,6 +3008,8 @@ class BasePlatformAdapter(ABC):
         """Stop typing, forwarding ``metadata`` only if ``stop_typing`` accepts it (Slack AI
         status is per thread, so dropping metadata could clear a sibling thread; introspecting
         keeps legacy ``stop_typing(chat_id)`` adapters working)."""
+        from gateway.outbound_messages import MessageType, with_message_type
+        metadata = with_message_type(metadata, MessageType.PROGRESS)
         if metadata and self._accepts_kwarg(
                 self.stop_typing, "metadata", var_kw=True, unknown=False):
             await self.stop_typing(chat_id, metadata=metadata)
@@ -3041,7 +3057,10 @@ class BasePlatformAdapter(ABC):
         reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send an image natively; default falls back to sending the URL as text."""
         text = f"{caption}\n{image_url}" if caption else image_url
-        return await self.send(chat_id=chat_id, content=text, reply_to=reply_to, metadata=metadata)
+        return await self.send(
+            chat_id=chat_id, content=text, reply_to=reply_to,
+            metadata=with_message_type(metadata, OutboundMessageType.ATTACHMENT),
+        )
 
     async def send_animation(
         self, chat_id: str, animation_url: str, caption: Optional[str] = None,
@@ -3100,6 +3119,7 @@ class BasePlatformAdapter(ABC):
         shown."""
         logger.warning("[%s] %s fallback: native %s send unavailable for %s", self.name, method, kind, path)
         text = _media_failure_text(kind, file_name)
+        metadata = with_message_type(metadata, OutboundMessageType.ATTACHMENT)
         return await self.emit_media_warning(chat_id, text, caption=caption, reply_to=reply_to, metadata=metadata,
                                              shown_metadata=metadata)
 
@@ -3239,7 +3259,8 @@ class BasePlatformAdapter(ABC):
         else:
             text = _media_failure_text("file", os.path.basename(media_path))
         try:
-            notice = await self.emit_warning(chat_id, text, metadata=metadata)
+            notice = await self.emit_warning(
+                chat_id, text, metadata=with_message_type(metadata, OutboundMessageType.SYSTEM))
             problem = None if notice is None or notice.success else notice.error
         except Exception as notify_err:
             problem = notify_err
@@ -3411,7 +3432,9 @@ class BasePlatformAdapter(ABC):
                     return
                 if chat_id not in self._typing_paused:
                     try:
-                        await asyncio.wait_for(self.send_typing(chat_id, metadata=metadata),
+                        from gateway.outbound_messages import MessageType, with_message_type
+                        typing_metadata = with_message_type(metadata, MessageType.PROGRESS)
+                        await asyncio.wait_for(self.send_typing(chat_id, metadata=typing_metadata),
                                                timeout=_send_typing_timeout)
                     except TimeoutError:
                         pass  # Slow network — abandon this tick, stay on schedule.
@@ -3528,10 +3551,13 @@ class BasePlatformAdapter(ABC):
     _OK_EMOJI: Optional[str] = None
     _FAIL_EMOJI: Optional[str] = None
 
-    async def on_processing_start(self, event: MessageEvent) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Hook called when background processing begins."""
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    async def on_processing_complete(
+        self, event: MessageEvent, outcome: ProcessingOutcome,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Hook called when background processing completes. Default: opt-in reaction ack — with
         ``_OK_EMOJI``/``_FAIL_EMOJI`` set and ``_add_reaction``/``_remove_reaction`` present, swap
         the in-progress reaction for the outcome one. Remove-then-add is deterministic whether the
@@ -3546,17 +3572,30 @@ class BasePlatformAdapter(ABC):
         if (not callable(add) or not callable(remove) or (callable(enabled) and not enabled())
                 or not chat_id or not message_id):
             return
-        await remove(chat_id, message_id)
+        await self._call_processing_operation(remove, chat_id, message_id, metadata=metadata)
         emoji = {ProcessingOutcome.SUCCESS: self._OK_EMOJI,
                  ProcessingOutcome.FAILURE: self._FAIL_EMOJI}.get(outcome)
         if emoji:
-            await add(chat_id, message_id, emoji)
+            await self._call_processing_operation(add, chat_id, message_id, emoji, metadata=metadata)
+
+    async def _call_processing_operation(
+        self, operation: Callable, *args: Any, metadata=None, **operation_kwargs: Any,
+    ) -> Any:
+        """Forward lifecycle metadata only when an adapter-owned operation accepts it."""
+        if self._accepts_kwarg(operation, "metadata", var_kw=True, unknown=False):
+            operation_kwargs["metadata"] = metadata
+        return await operation(*args, **operation_kwargs)
 
     async def _run_processing_hook(self, hook_name: str, *args: Any, **kwargs: Any) -> None:
         """Run a lifecycle hook without letting failures break message flow."""
         hook = getattr(self, hook_name, None)
         if not callable(hook):
             return
+        # Lifecycle metadata is optional for adapter overrides shipped before the
+        # metadata-aware hook contract. Only forward supported keywords.
+        if kwargs:
+            kwargs = {key: value for key, value in kwargs.items()
+                      if self._accepts_kwarg(hook, key, var_kw=True, unknown=False)}
         try:
             await hook(*args, **kwargs)
         except Exception as e:
@@ -3612,9 +3651,12 @@ class BasePlatformAdapter(ABC):
                         len(text), event.source.chat_id)
         result = await self._send_with_retry(
             chat_id=event.source.chat_id, content=text, reply_to=_reply_anchor_for_event(event),
-            metadata=_mark_notify_metadata(thread_meta))
+            metadata=with_message_type(_mark_notify_metadata(thread_meta), OutboundMessageType.REPLY))
         if eph_ttl > 0 and result.success and result.message_id:
-            self._schedule_ephemeral_delete(event.source.chat_id, result.message_id, eph_ttl)
+            self._schedule_ephemeral_delete(
+                event.source.chat_id, result.message_id, eph_ttl,
+                metadata=with_message_type(_mark_notify_metadata(thread_meta), OutboundMessageType.REPLY),
+            )
 
     def _media_delivery_scope(self, source: Optional[SessionSource]):
         """Routed home + terminal policy for post-handler text, media and error delivery;
@@ -4393,6 +4435,7 @@ class BasePlatformAdapter(ABC):
             event, session_key, text_content, delivery_adapter, is_ephemeral_response)
         if obligation_id is not None:
             await self._release_turn_marker(event)  # the ledger now owns the crash recovery
+        metadata = with_message_type(metadata, OutboundMessageType.REPLY)
         result = await delivery_adapter._send_with_retry(
             chat_id=event.source.chat_id, content=text_content, reply_to=reply_to, metadata=metadata)
         stop_reply_clock(delivery_adapter, event.source.chat_id, result)
@@ -4416,7 +4459,9 @@ class BasePlatformAdapter(ABC):
             reply_to=_reply_anchor_for_event(event), is_ephemeral_response=is_ephemeral_response)
         record_delivery(result)
         if ephemeral_ttl and ephemeral_ttl > 0 and result.success and result.message_id:
-            delivery_adapter._schedule_ephemeral_delete(event.source.chat_id, result.message_id, ephemeral_ttl)
+            delivery_adapter._schedule_ephemeral_delete(
+                event.source.chat_id, result.message_id, ephemeral_ttl, metadata=metadata,
+            )
 
     async def _notify_turn_error(self, event: MessageEvent, e: BaseException) -> Optional[dict]:
         """Tell the user a turn failed rather than leaving radio silence (last resort:
@@ -4425,6 +4470,7 @@ class BasePlatformAdapter(ABC):
         try:
             _thread_metadata = _thread_metadata_for_event(event)
             error_detail = str(e)[:300] if str(e) else t("gateway.notify.turn_error_no_details")
+            _thread_metadata = with_message_type(_thread_metadata, OutboundMessageType.SYSTEM)
             # Only the policy reads bind the routed profile; the send stays in the launch scope
             # as before, so delivery bookkeeping keeps landing where boot-time recovery reads it.
             with self._media_delivery_scope(event.source):
@@ -4574,8 +4620,10 @@ class BasePlatformAdapter(ABC):
         _thread_metadata = _thread_metadata_for_event(event)
         typing_task = self._start_typing_refresh(event, interrupt_event, _thread_metadata)
         try:
-            await self._run_processing_hook("on_processing_start", event)
             event._turn_marker_handoff = self.gateway_runner is not None  # it can release the marker
+            await self._run_processing_hook(
+                "on_processing_start", event,
+                metadata=with_message_type(_thread_metadata, OutboundMessageType.PROGRESS))
             response = await self._message_handler(event)
             # A muted diagnostic wake ran for the session; its reply is not presented. The
             # policy read binds the routed profile; delivery itself stays in the launch scope.
@@ -4643,7 +4691,8 @@ class BasePlatformAdapter(ABC):
                 event=event) or "")
             await self._run_processing_hook(
                 "on_processing_complete", event,
-                ProcessingOutcome.SUCCESS if processing_ok else ProcessingOutcome.FAILURE)
+                ProcessingOutcome.SUCCESS if processing_ok else ProcessingOutcome.FAILURE,
+                metadata=with_message_type(_thread_metadata, OutboundMessageType.INTERACTION))
             # Force-flush an unfired debounce timer so this task hands off to a fresh drain task.
             # Clear the Event BEFORE the stop-typing await so concurrent inbound sees a live guard.
             await self._flush_text_debounce_now(session_key)
@@ -4661,10 +4710,13 @@ class BasePlatformAdapter(ABC):
             expected = asyncio.current_task() in self._expected_cancelled_tasks
             await self._run_processing_hook(
                 "on_processing_complete", event,
-                ProcessingOutcome.CANCELLED if expected else ProcessingOutcome.FAILURE)
+                ProcessingOutcome.CANCELLED if expected else ProcessingOutcome.FAILURE,
+                metadata=with_message_type(_thread_metadata, OutboundMessageType.INTERACTION))
             raise
         except BaseException as e:
-            await self._run_processing_hook("on_processing_complete", event, ProcessingOutcome.FAILURE)
+            await self._run_processing_hook(
+                "on_processing_complete", event, ProcessingOutcome.FAILURE,
+                metadata=with_message_type(_thread_metadata, OutboundMessageType.INTERACTION))
             logger.error("[%s] Error handling message: %s", self.name, e, exc_info=True)
             _thread_metadata = (await self._notify_turn_error(event, e)) or _thread_metadata
             # SystemExit/KeyboardInterrupt propagate; other BaseExceptions are contained.

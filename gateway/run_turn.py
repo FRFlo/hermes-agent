@@ -23,6 +23,7 @@ from contextlib import nullcontext, suppress
 from contextvars import copy_context
 from gateway.config import Platform
 from gateway.media_repair import repair_explicit_computer_use_media_paths
+from gateway.outbound_messages import MessageType, with_message_type
 from gateway.platforms.base import BasePlatformAdapter, ProcessingOutcome
 from gateway.platforms.event import MessageEvent
 from gateway.response_filters import (
@@ -566,7 +567,7 @@ class GatewayTurnMixin:
                     session_info = await asyncio.to_thread(self._reset_notice_session_info, source)
                     if session_info:
                         notice = f"{notice}\n\n{session_info}"
-                await adapter.send(source.chat_id, notice, metadata=self._thread_metadata_for_source(source))
+                await adapter.send(source.chat_id, notice, metadata=with_message_type(self._thread_metadata_for_source(source), MessageType.SYSTEM))
         except Exception as e:
             logger.debug("Auto-reset notification failed (non-fatal): %s", e)
 
@@ -903,8 +904,10 @@ class GatewayTurnMixin:
         try:
             _adapter = self._delivery_adapter_for(source)
             if _adapter and source.chat_id:
-                await _adapter.emit_warning(source.chat_id, message, metadata=meta,
-                                            logical_platform=source.platform)
+                await _adapter.emit_warning(
+                    source.chat_id, message,
+                    metadata=with_message_type(meta, MessageType.SYSTEM),
+                    logical_platform=source.platform)
         except Exception as _werr:
             logger.warning("Failed to deliver %s to user: %s", what, _werr)
 
@@ -1946,7 +1949,7 @@ class GatewayTurnMixin:
             # Streaming delivered the body, but the footer was held back (`not already_sent` gate).
             if _footer_line and adapter:
                 try:
-                    await adapter.send(source.chat_id, _footer_line, metadata=self._event_thread_metadata(event, source))
+                    await adapter.send(source.chat_id, _footer_line, metadata=with_message_type(self._event_thread_metadata(event, source), MessageType.REPLY))
                 except Exception as _e:
                     logger.debug("trailing footer send failed: %s", _e)
             # Return None so the body isn't sent twice; stash the delivered text on the event for the
@@ -2432,7 +2435,11 @@ class GatewayTurnMixin:
             user_config = _load_gateway_config()
             model, runtime_kwargs = self._resolve_session_agent_runtime(source=source, user_config=user_config)
             if not runtime_kwargs.get("api_key"):
-                await adapter.send(source.chat_id, t("gateway.background.no_credentials"), metadata=_thread_metadata)
+                await adapter.send(
+                    source.chat_id,
+                    t("gateway.background.no_credentials"),
+                    metadata=with_message_type(_thread_metadata, MessageType.NOTIFICATION),
+                )
                 return
 
             platform_key = _platform_config_key(source.platform)
@@ -2507,15 +2514,19 @@ class GatewayTurnMixin:
                 media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
                 images, text_content = adapter.extract_images(response)
             if text_content:
-                await adapter.send(chat_id=source.chat_id, content=header + text_content, metadata=_thread_metadata)
+                await adapter.send(
+                    chat_id=source.chat_id, content=header + text_content,
+                    metadata=with_message_type(_thread_metadata, MessageType.NOTIFICATION),
+                )
             elif not images and not media_files:
                 await adapter.send(
-                    chat_id=source.chat_id, content=header + t("gateway.background.no_response"), metadata=_thread_metadata,
+                    chat_id=source.chat_id, content=header + t("gateway.background.no_response"),
+                    metadata=with_message_type(_thread_metadata, MessageType.NOTIFICATION),
                 )
             for image_url, alt_text in (images or []):
                 with suppress(Exception):
                     await adapter.send_image(
-                        chat_id=source.chat_id, image_url=image_url, caption=alt_text, metadata=_thread_metadata,
+                        chat_id=source.chat_id, image_url=image_url, caption=alt_text, metadata=with_message_type(_thread_metadata, MessageType.ATTACHMENT),
                     )
             # Route each media file by type (voice bubble / video / image / document), as the
             # streaming + kanban paths do.
@@ -2526,7 +2537,7 @@ class GatewayTurnMixin:
                 with suppress(Exception):
                     if _should_send_media_as_audio(source.platform, _ext, _is_voice):
                         await adapter.send_voice(
-                            chat_id=source.chat_id, audio_path=media_path, metadata=_thread_metadata,
+                            chat_id=source.chat_id, audio_path=media_path, metadata=with_message_type(_thread_metadata, MessageType.ATTACHMENT),
                             is_voice=_is_voice,
                         )
                     else:
@@ -2535,7 +2546,7 @@ class GatewayTurnMixin:
                             else (adapter.send_image_file, "image_path") if _ext in _IMAGE_EXTS
                             else (adapter.send_document, "file_path")
                         )
-                        await sender(chat_id=source.chat_id, metadata=_thread_metadata, **{key: media_path})
+                        await sender(chat_id=source.chat_id, metadata=with_message_type(_thread_metadata, MessageType.ATTACHMENT), **{key: media_path})
 
         except Exception:
             logger.exception("Background task %s failed", task_id)
@@ -2544,7 +2555,8 @@ class GatewayTurnMixin:
                 await adapter.emit_warning(
                     source.chat_id,
                     t("gateway.background.failed", preview=_bg_prompt_preview(prompt)),
-                    metadata=_thread_metadata, logical_platform=source.platform,
+                    metadata=with_message_type(_thread_metadata, MessageType.NOTIFICATION),
+                    logical_platform=source.platform,
                 )
 
     def _mcp_reload_refresh_cached_agents(self, multiplex: bool, profile) -> None:
@@ -2819,7 +2831,9 @@ class GatewayTurnMixin:
         _adapter = self._delivery_adapter_for(source)
         if _adapter and not scheduled_heartbeat:
             with suppress(Exception):
-                await _adapter.send_typing(source.chat_id, metadata=_thread_metadata)
+                await _adapter.send_typing(
+                    source.chat_id, metadata=with_message_type(_thread_metadata, MessageType.PROGRESS),
+                )
 
         full_response = ""
         _start = time.time()
@@ -3508,7 +3522,9 @@ class GatewayTurnMixin:
                     "gateway.progress.stuck_warning",
                     minutes=int(worker.agent_warning // 60) or 1,
                     remaining=int((worker.agent_timeout - worker.agent_warning) // 60) or 1),
-                metadata=_interim_metadata(_status_thread_metadata), logical_platform=source.platform,
+                metadata=with_message_type(
+                    _interim_metadata(_status_thread_metadata), MessageType.SYSTEM),
+                logical_platform=source.platform,
             )
         except Exception as _warn_err:
             logger.debug("Inactivity warning send error: %s", _warn_err)
@@ -3910,7 +3926,10 @@ class GatewayTurnMixin:
         # Restart the typing indicator; the outer typing task may be stale.
         if _clear_adapter:
             with suppress(Exception):
-                await _clear_adapter.send_typing(source.chat_id, metadata=_status_thread_metadata)
+                await _clear_adapter.send_typing(
+                    source.chat_id,
+                    metadata=with_message_type(_status_thread_metadata, MessageType.PROGRESS),
+                )
 
         # Re-baseline the cached agent's message_count before recursing, else the coherence guard
         # rebuilds on OUR OWN flushed rows (the outer handler re-baselines only after the chain).
@@ -4029,8 +4048,13 @@ class GatewayTurnMixin:
         ``(session, error)`` and an exception logs ``fail_exc`` as ``(session, exc)``; either way
         ``already_sent`` stays unset so the normal final send delivers the content."""
         try:
+            from agent.interrupt_compat import _accepts_keyword
+            edit_kwargs = {}
+            if _accepts_keyword(_sc.adapter.edit_message, "metadata"):
+                edit_kwargs["metadata"] = with_message_type(_sc.metadata, MessageType.PROGRESS)
             _res = await _sc.adapter.edit_message(
                 chat_id=source.chat_id, message_id=_sc.message_id, content=content, finalize=True,
+                **edit_kwargs,
             )
         except Exception as _edit_err:
             logger.warning(fail_exc, _sk, _edit_err)
@@ -4146,13 +4170,18 @@ class GatewayTurnMixin:
             return
         _ids_snapshot = list(_cleanup_msg_ids)
         _chat_id_snapshot = turn_ctx.source.chat_id
+        _progress_metadata = with_message_type(turn_ctx._progress_metadata, MessageType.PROGRESS)
         _loop_snapshot = asyncio.get_running_loop()
 
         def _cleanup_temp_bubbles() -> None:
             async def _delete_all() -> None:
                 for _mid in _ids_snapshot:
                     with suppress(Exception):
-                        await _cleanup_adapter.delete_message(_chat_id_snapshot, _mid)
+                        from agent.interrupt_compat import _accepts_keyword
+                        delete_kwargs = {}
+                        if _accepts_keyword(_cleanup_adapter.delete_message, "metadata"):
+                            delete_kwargs["metadata"] = _progress_metadata
+                        await _cleanup_adapter.delete_message(_chat_id_snapshot, _mid, **delete_kwargs)
             with suppress(Exception):
                 safe_schedule_threadsafe(
                     _delete_all(), _loop_snapshot, logger=logger,
@@ -4240,7 +4269,16 @@ class GatewayTurnMixin:
                 _notify_res = None
                 if _heartbeat_msg_id:
                     try:
-                        _notify_res = await _notify_adapter.edit_message(source.chat_id, _heartbeat_msg_id, _heartbeat_text)
+                        from agent.interrupt_compat import _accepts_keyword
+                        edit_kwargs = {}
+                        if _accepts_keyword(_notify_adapter.edit_message, "metadata"):
+                            edit_kwargs["metadata"] = with_message_type(
+                                _non_conversational_metadata(_status_thread_metadata, platform=source.platform),
+                                MessageType.PROGRESS,
+                            )
+                        _notify_res = await _notify_adapter.edit_message(
+                            source.chat_id, _heartbeat_msg_id, _heartbeat_text, **edit_kwargs,
+                        )
                     except Exception as _ee:
                         logger.debug("Heartbeat edit failed: %s", _ee)
                         _notify_res = None
@@ -4253,7 +4291,7 @@ class GatewayTurnMixin:
                         break
                     _notify_res = await _notify_adapter.send(
                         source.chat_id, _heartbeat_text,
-                        metadata=_interim_metadata(_non_conversational_metadata(_status_thread_metadata, platform=source.platform)),
+                        metadata=with_message_type(_interim_metadata(_non_conversational_metadata(_status_thread_metadata, platform=source.platform)), MessageType.PROGRESS),
                     )
                     if getattr(_notify_res, "success", False) and getattr(_notify_res, "message_id", None):
                         _heartbeat_msg_id = str(_notify_res.message_id)

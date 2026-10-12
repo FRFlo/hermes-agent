@@ -293,7 +293,7 @@ class MattermostAdapter(BasePlatformAdapter):
     async def send_typing(self, chat_id: str, metadata: _Metadata = None) -> None:
         await self._api_post(f"users/{self._bot_user_id}/typing", {"channel_id": chat_id})
 
-    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
+    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         payload = _with_mentions_disabled({"message": self.format_message(content)})
         return _post_result(await self._api("PUT", f"posts/{message_id}/patch", payload), "Failed to edit post")
 

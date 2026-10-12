@@ -755,6 +755,8 @@ async def _send_or_update_status_coro(adapter, chat_id, status_key, content, met
     See #30045.
     """
     sender = getattr(adapter, "send_or_update_status", None)
+    from gateway.outbound_messages import MessageType, with_message_type
+    metadata = with_message_type(metadata, MessageType.PROGRESS)
     if callable(sender):
         return await sender(chat_id, status_key, content, metadata=metadata)
     return await adapter.send(chat_id, content, metadata=metadata)

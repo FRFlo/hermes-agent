@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from gateway.outbound_messages import MessageType, with_message_type
+
 import re
 from functools import partial
 from pathlib import Path
@@ -683,7 +685,8 @@ class _KanbanNotification:
         _send_res = None
         async def send_ping():
             nonlocal _send_res
-            _send_res = await adapter.send(sub["chat_id"], msg, metadata=metadata)
+            _send_res = await adapter.send(
+                sub["chat_id"], msg, metadata=with_message_type(metadata, MessageType.NOTIFICATION))
         if not await present_notification(send_ping, platform=self.platform_str, diagnostic=diagnostic_event(ev)):
             return False
         # SendResult(success=False) without an exception is a FAILED delivery

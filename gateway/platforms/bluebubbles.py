@@ -385,7 +385,9 @@ class BlueBubblesAdapter(BasePlatformAdapter):
     # --- Media sending (outbound) ---
 
     async def _send_attachment(self, chat_id: str, file_path: str, filename: Optional[str] = None,
-                               caption: Optional[str] = None, is_audio_message: bool = False) -> SendResult:
+                               caption: Optional[str] = None, is_audio_message: bool = False,
+                               reply_to: Optional[str] = None,
+                               metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Send a file attachment via BlueBubbles multipart upload."""
         if not self.client:
             return SendResult(success=False, error="Not connected")
@@ -407,7 +409,11 @@ class BlueBubblesAdapter(BasePlatformAdapter):
             res.raise_for_status()
             result = res.json()
             if caption:
-                await self.send(chat_id, caption)
+                from gateway.outbound_messages import MessageType, with_message_type
+                await self.send(
+                    chat_id, caption, reply_to=reply_to,
+                    metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+                )
             if result.get("status") == 200:
                 rdata = result.get("data") or {}
                 return SendResult(success=True, message_id=rdata.get("guid") if isinstance(rdata, dict) else None,
@@ -420,21 +426,34 @@ class BlueBubblesAdapter(BasePlatformAdapter):
                          reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
         try:
             from gateway.platforms.base import cache_image_from_url
-            return await self._send_attachment(chat_id, await cache_image_from_url(image_url), caption=caption)
+            return await self._send_attachment(
+                chat_id, await cache_image_from_url(image_url), caption=caption,
+                reply_to=reply_to, metadata=metadata,
+            )
         except Exception:
-            return await super().send_image(chat_id, image_url, caption, reply_to)
+            return await super().send_image(chat_id, image_url, caption, reply_to, metadata)
 
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, **kw) -> SendResult:
-        return await self._send_attachment(chat_id, image_path, caption=caption)
+        return await self._send_attachment(
+            chat_id, image_path, caption=caption, reply_to=reply_to, metadata=kw.get("metadata"),
+        )
 
     async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, **kw) -> SendResult:
-        return await self._send_attachment(chat_id, audio_path, caption=caption, is_audio_message=True)
+        return await self._send_attachment(
+            chat_id, audio_path, caption=caption, is_audio_message=True,
+            reply_to=reply_to, metadata=kw.get("metadata"),
+        )
 
     async def send_video(self, chat_id, video_path, caption=None, reply_to=None, **kw) -> SendResult:
-        return await self._send_attachment(chat_id, video_path, caption=caption)
+        return await self._send_attachment(
+            chat_id, video_path, caption=caption, reply_to=reply_to, metadata=kw.get("metadata"),
+        )
 
     async def send_document(self, chat_id, file_path, caption=None, file_name=None, reply_to=None, **kw) -> SendResult:
-        return await self._send_attachment(chat_id, file_path, filename=file_name, caption=caption)
+        return await self._send_attachment(
+            chat_id, file_path, filename=file_name, caption=caption,
+            reply_to=reply_to, metadata=kw.get("metadata"),
+        )
 
     async def send_animation(self, chat_id, animation_url, caption=None, reply_to=None, metadata=None) -> SendResult:
         return await self.send_image(chat_id, animation_url, caption, reply_to, metadata)
@@ -444,7 +463,7 @@ class BlueBubblesAdapter(BasePlatformAdapter):
     async def send_typing(self, chat_id: str, metadata=None) -> None:
         await self._private_api_chat_call(chat_id, "typing", "post")
 
-    async def stop_typing(self, chat_id: str) -> None:
+    async def stop_typing(self, chat_id: str, metadata=None) -> None:
         await self._private_api_chat_call(chat_id, "typing", "delete")
 
     async def mark_read(self, chat_id: str) -> bool:

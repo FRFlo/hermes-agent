@@ -1028,8 +1028,12 @@ class OwnerCommandMiddleware(InboundMiddleware):
         )
         if matched_cmd and not is_owner:
             logger.info("[%s] Reject non-owner slash command: chat=%s from=%s cmd=%s", adapter.name, ctx.chat_id, ctx.from_account, matched_cmd)
+            from gateway.outbound_messages import MessageType, with_message_type
             adapter._track_task(asyncio.create_task(
-                adapter.send(ctx.chat_id, t("platform.yuanbao.owner_command_denied", command=matched_cmd)),
+                adapter.send(
+                    ctx.chat_id, t("platform.yuanbao.owner_command_denied", command=matched_cmd),
+                    metadata=with_message_type(None, MessageType.SYSTEM),
+                ),
                 name=f"yuanbao-owner-cmd-denial-{matched_cmd}"))
             return  # Stop pipeline
         if matched_cmd and is_owner and cmd_line:
@@ -2428,15 +2432,20 @@ class MessageSender:
 
     async def send_direct(self, chat_id: str, message: str, media_files: Optional[list[tuple[str, bool]]] = None) -> dict[str, Any]:
         """send_message tool entry: text first, then each media file by extension, on the running adapter."""
+        from gateway.outbound_messages import MessageType, with_message_type
         adapter = self._adapter
         last_result: Optional[SendResult] = None
         if message.strip():
-            last_result = await adapter.send(chat_id, message)
+            last_result = await adapter.send(
+                chat_id, message, metadata=with_message_type(None, MessageType.NOTIFICATION),
+            )
             if not last_result.success:
                 return {"error": f"Yuanbao send failed: {last_result.error}"}
         for media_path, _is_voice in media_files or []:
             send = adapter.send_image_file if Path(media_path).suffix.lower() in self.IMAGE_EXTS else adapter.send_document
-            last_result = await send(chat_id, media_path)
+            last_result = await send(
+                chat_id, media_path, metadata=with_message_type(None, MessageType.ATTACHMENT),
+            )
             if not last_result.success:
                 return {"error": f"Yuanbao media send failed: {last_result.error}"}
         if last_result is None:
@@ -2734,7 +2743,7 @@ class YuanbaoAdapter(BasePlatformAdapter):
         with contextlib.suppress(Exception):
             await self._outbound.heartbeat.start(chat_id)
 
-    async def stop_typing(self, chat_id: str) -> None:
+    async def stop_typing(self, chat_id: str, metadata=None) -> None:
         """Stop RUNNING without FINISH — send() emits FINISH after delivery so ordering is
         RUNNING… → message → FINISH."""
         with contextlib.suppress(Exception):

@@ -1701,7 +1701,7 @@ class FeishuAdapter(BasePlatformAdapter):
             logger.error("[Feishu] Send error: %s", exc, exc_info=True)
             return SendResult(success=False, error=str(exc))
 
-    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False) -> SendResult:
+    async def edit_message(self, chat_id: str, message_id: str, content: str, *, finalize: bool = False, metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         """Edit a previously sent Feishu text/post message."""
         if not self._client:
             return SendResult(success=False, error="Not connected")
@@ -2560,11 +2560,11 @@ class FeishuAdapter(BasePlatformAdapter):
         data = await self._reaction_call("Remove", message_id, reaction_id, _build, self._client.im.v1.message_reaction.delete)
         return data is not None
 
-    async def on_processing_start(self, event: MessageEvent) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata=None) -> None:
         message_id = event.message_id
         if not self._reactions_enabled() or not message_id or message_id in self._pending_processing_reactions:
             return
-        reaction_id = await self._add_reaction(message_id, _FEISHU_REACTION_IN_PROGRESS)
+        reaction_id = await self._call_processing_operation(self._add_reaction, message_id, _FEISHU_REACTION_IN_PROGRESS, metadata=metadata)
         if reaction_id:
             cache = self._pending_processing_reactions
             cache[message_id] = reaction_id
@@ -2572,19 +2572,19 @@ class FeishuAdapter(BasePlatformAdapter):
             while len(cache) > _FEISHU_PROCESSING_REACTION_CACHE_SIZE:
                 cache.popitem(last=False)
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome, metadata=None) -> None:
         message_id = event.message_id
         if not self._reactions_enabled() or not message_id:
             return
         start_reaction_id = self._pending_processing_reactions.get(message_id)
         if start_reaction_id:
-            if not await self._remove_reaction(message_id, start_reaction_id):
+            if not await self._call_processing_operation(self._remove_reaction, message_id, start_reaction_id, metadata=metadata):
                 # Don't stack a second badge on a Typing we couldn't remove (UI would read as both
                 # "working" and "done/failed"); keep the handle so LRU eventually evicts it.
                 return
             self._pending_processing_reactions.pop(message_id, None)
         if outcome is ProcessingOutcome.FAILURE:
-            await self._add_reaction(message_id, _FEISHU_REACTION_FAILURE)
+            await self._call_processing_operation(self._add_reaction, message_id, _FEISHU_REACTION_FAILURE, metadata=metadata)
 
     # --- Webhook server and security ---
     def _record_webhook_anomaly(self, remote_ip: str, status: str) -> None:

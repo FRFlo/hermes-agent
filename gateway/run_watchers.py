@@ -13,6 +13,7 @@ import time
 from collections import Counter
 from typing import Any, Dict, Optional
 
+from gateway.outbound_messages import MessageType, with_message_type
 from gateway.session_stall import (
     format_session_stall_notification,
     resolve_session_idle_seconds_from_activity,
@@ -188,7 +189,9 @@ class GatewaySessionWatchersMixin:
                 # Bound the send: a wedged adapter transport (network hang, dead websocket) must not
                 # block the watcher pass — siblings would go unevaluated and the watcher stop.
                 result = await asyncio.wait_for(
-                    adapter.send(str(source.chat_id), notice, metadata=metadata),
+                    adapter.send(
+                        str(source.chat_id), notice,
+                        metadata=with_message_type(metadata, MessageType.NOTIFICATION)),
                     timeout=_STALL_NOTIFY_SEND_TIMEOUT_SECONDS,
                 )
             async with _async_profile_runtime_scope(self._resolve_profile_home_for_source(source)):

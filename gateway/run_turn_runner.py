@@ -24,6 +24,7 @@ from agent.interrupt_compat import _accepts_keyword
 from agent.replay_cleanup import canonicalize_replay_history
 from gateway.config import Platform
 from gateway.media_repair import repair_explicit_computer_use_media_paths
+from gateway.outbound_messages import MessageType, with_message_type
 from gateway.platforms.base import BasePlatformAdapter
 from gateway.platforms.base_exec_approval import ea_default_reason_text
 from gateway.turn_context import TurnContext
@@ -391,7 +392,8 @@ class TurnRunner:
             return
         if st.fallback_msg_id:
             result = await st.adapter.edit_message(
-                chat_id=ctx.source.chat_id, message_id=st.fallback_msg_id, content=text, metadata=ctx._progress_metadata,
+                chat_id=ctx.source.chat_id, message_id=st.fallback_msg_id, content=text,
+                metadata=with_message_type(ctx._progress_metadata, MessageType.PROGRESS),
             )
             if getattr(result, "success", False):
                 return
@@ -433,7 +435,9 @@ class TurnRunner:
         if not st.native_failed:
             result = await st.adapter.send_native_task_card_progress(
                 chat_id=ctx.source.chat_id, tasks=st.visible_tasks(), title=t("gateway.progress.task_card_title"),
-                reply_to=ctx._progress_reply_to, metadata=ctx._progress_metadata, fallback_text=st.fallback_text(),
+                reply_to=ctx._progress_reply_to,
+                metadata=with_message_type(ctx._progress_metadata, MessageType.PROGRESS),
+                fallback_text=st.fallback_text(),
             )
             if getattr(result, "success", False):
                 return
@@ -526,7 +530,8 @@ class TurnRunner:
                 # final-delivery logic (cleanup awaits catch only CancelledError).
                 try:
                     await adapter.stop_native_task_card_progress(
-                        ctx.source.chat_id, reply_to=ctx._progress_reply_to, metadata=ctx._progress_metadata,
+                        ctx.source.chat_id, reply_to=ctx._progress_reply_to,
+                        metadata=with_message_type(ctx._progress_metadata, MessageType.PROGRESS),
                     )
                 except asyncio.CancelledError:
                     raise
@@ -567,7 +572,7 @@ class TurnRunner:
             # Leave room for platform quirks / formatting; tiny test adapters keep a usable limit.
             _PROGRESS_TEXT_LIMIT=max(1, raw_limit - (64 if raw_limit > 128 else 0)),
             # Overflow edits pass metadata (Telegram topic/thread routing) only when edit_message takes it.
-            _edit_accepts_metadata=bool(ctx._progress_metadata) and _accepts_keyword(adapter.edit_message, "metadata"),
+            _edit_accepts_metadata=_accepts_keyword(adapter.edit_message, "metadata"),
         )
 
     async def _edit_progress_message(self, st, message_id: str, content: str):
@@ -576,7 +581,8 @@ class TurnRunner:
         if getattr(st.adapter, "REQUIRES_EDIT_FINALIZE", False):
             kwargs["finalize"] = True
         if st._edit_accepts_metadata:
-            kwargs["metadata"] = ctx._progress_metadata
+            from gateway.outbound_messages import MessageType, with_message_type
+            kwargs["metadata"] = with_message_type(ctx._progress_metadata, MessageType.PROGRESS)
         return await st.adapter.edit_message(**kwargs)
 
     @staticmethod
@@ -596,9 +602,11 @@ class TurnRunner:
         return groups + ([current] if current else [])
 
     async def _send_progress_text(self, st, text: str):
+        from gateway.outbound_messages import MessageType, with_message_type
         ctx = self._ctx
         result = await st.adapter.send(
-            chat_id=ctx.source.chat_id, content=text, reply_to=ctx._progress_reply_to, metadata=ctx._progress_metadata,
+            chat_id=ctx.source.chat_id, content=text, reply_to=ctx._progress_reply_to,
+            metadata=with_message_type(ctx._progress_metadata, MessageType.PROGRESS),
         )
         self._track_progress_result(result)
         return result
@@ -682,7 +690,11 @@ class TurnRunner:
         ctx = self._ctx
         await asyncio.sleep(0.3)
         if ctx._run_still_current():
-            await st.adapter.send_typing(ctx.source.chat_id, metadata=ctx._progress_metadata)
+            from gateway.outbound_messages import MessageType, with_message_type
+            await st.adapter.send_typing(
+                ctx.source.chat_id,
+                metadata=with_message_type(ctx._progress_metadata, MessageType.PROGRESS),
+            )
 
     async def _progress_send_or_edit(self, st, msg) -> bool:
         """Deliver this tick's bubble. Returns False on a transient edit failure (retry next tick).
@@ -855,7 +867,13 @@ class TurnRunner:
 
     def _send_status_text(self, text: str, metadata, log_message: str) -> None:
         ctx = self._ctx
-        self._schedule(ctx._status_adapter.send(ctx._status_chat_id, text, metadata=metadata), log_message)
+        from gateway.outbound_messages import MessageType, with_message_type
+        self._schedule(
+            ctx._status_adapter.send(
+                ctx._status_chat_id, text, metadata=with_message_type(metadata, MessageType.PROGRESS),
+            ),
+            log_message,
+        )
 
     def _attach_session_title_callback(self, agent, ctx) -> None:
         """Wire the platform thread-rename lane onto the agent as `_on_session_title`.
@@ -1388,7 +1406,8 @@ class TurnRunner:
         choices = list(choices) if choices else None
         send_kwargs = dict(
             chat_id=ctx._status_chat_id, question=question, choices=choices, clarify_id=clarify_id,
-            session_key=session_key, metadata=ctx._status_thread_metadata,
+            session_key=session_key,
+            metadata=with_message_type(ctx._status_thread_metadata, MessageType.INTERACTION),
         )
 
         def _text_fallback():
@@ -1474,7 +1493,7 @@ class TurnRunner:
                 fut = self._schedule(
                     adapter.send_exec_approval(
                         chat_id=ctx._status_chat_id, command=cmd, session_key=ctx.session_key or "",
-                        description=desc, metadata=ctx._status_thread_metadata, **flags,
+                        description=desc, metadata=with_message_type(ctx._status_thread_metadata, MessageType.INTERACTION), **flags,
                     ),
                     "send_exec_approval scheduling error",
                 )
@@ -1537,7 +1556,9 @@ class TurnRunner:
         try:
             # Mark as approval prompt: WeCom routes it through the control lane and Telegram pushes it
             # in "important" mode (#132516). Never ``notify`` — A2A reads that as the turn-final reply.
-            metadata = {**(ctx._status_thread_metadata or {}), "is_approval_prompt": True}
+            metadata = with_message_type(
+                {**(ctx._status_thread_metadata or {}), "is_approval_prompt": True}, MessageType.INTERACTION,
+            )
             fut = self._schedule(
                 adapter.send(ctx._status_chat_id, msg, metadata=_interim_metadata(metadata)), "Approval text-send scheduling error",
             )

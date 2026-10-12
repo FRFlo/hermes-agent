@@ -1524,13 +1524,16 @@ class QQAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None) -> SendResult:
         """Send an image natively via QQ Bot API upload; URL sources fall back to text."""
-        del metadata
         result = await self._send_media(chat_id, image_url, MEDIA_TYPE_IMAGE, "image", caption, reply_to)
         if result.success or not self._is_url(image_url):
             return result
         logger.warning("[%s] Image send failed, falling back to text: %s", self._log_tag, result.error)
         fallback = f"{caption}\n{image_url}" if caption else image_url
-        return await self.send(chat_id=chat_id, content=fallback, reply_to=reply_to)
+        from gateway.outbound_messages import MessageType, with_message_type
+        return await self.send(
+            chat_id=chat_id, content=fallback, reply_to=reply_to,
+            metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+        )
 
     async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, **kwargs) -> SendResult:
         return await self._send_media(chat_id, image_path, MEDIA_TYPE_IMAGE, "image", caption, reply_to)

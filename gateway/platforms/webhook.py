@@ -37,6 +37,7 @@ except ImportError:
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 from gateway.platforms.tcp_site import start_tcp_site
 from gateway.platforms.webhook_coalesce import WebhookCoalescer, validate_coalesce_config
 from gateway.platforms.webhook_filters import DEFAULT_SCRIPT_TIMEOUT_SECONDS, WebhookRouteProcessor
@@ -736,11 +737,11 @@ class WebhookAdapter(BasePlatformAdapter):
         task.add_done_callback(self._background_tasks.discard)
         return task
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: Any) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: Any, metadata=None) -> None:
         """Close the one-shot per-delivery session: ``prune_sessions`` only reaps rows with ``ended_at`` set, so
         unclosed webhook sessions leak unbounded. Fires at the true end of the run; ``end_session()`` is
         first-reason-wins."""
-        await self._end_webhook_session(event, event.source.chat_id)
+        await self._call_processing_operation(self._end_webhook_session, event, event.source.chat_id, metadata=metadata)
 
     async def _end_webhook_session(self, event: MessageEvent, session_chat_id: str) -> None:
         """Mark the per-delivery session ended via ``SessionDB.end_session`` (never a hand-written UPDATE),
@@ -942,7 +943,10 @@ class WebhookAdapter(BasePlatformAdapter):
                     return SendResult(success=False, error=f"No chat_id or home channel for {platform_name}")
                 chat_id = home.chat_id
             thread_id = extra.get("message_thread_id") or extra.get("thread_id")  # Telegram forum topics
-            result = await adapter.send(chat_id, content, metadata={"thread_id": thread_id} if thread_id else None)
+            result = await adapter.send(
+                chat_id, content,
+                metadata=with_message_type(
+                    {"thread_id": thread_id} if thread_id else None, OutboundMessageType.NOTIFICATION))
             if result.success:
                 self._mirror_delivery(platform_name, str(chat_id), content, delivery, thread_id)
             return result

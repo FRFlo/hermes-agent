@@ -4045,7 +4045,7 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         logger.debug("[%s] Overflow split delivered %d chunks; last_id=%s", self.name, 1 + len(continuation_ids), last_id)
         return SendResult(success=True, message_id=last_id, continuation_message_ids=tuple(continuation_ids))
 
-    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """Delete a bot-posted message (Bot API allows it within 48h); failures are non-fatal.
 
         Used by the stream consumer's fresh-final cleanup path (ported from openclaw/openclaw#72038) to
@@ -7136,16 +7136,16 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         """Clear all bot-set reactions."""
         return await self._set_reaction(chat_id, message_id, None)
 
-    async def on_processing_start(self, event: MessageEvent) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata=None) -> None:
         """Add an in-progress reaction when message processing begins."""
         if not self._reactions_enabled():
             return
         chat_id = getattr(event.source, "chat_id", None)
         message_id = getattr(event, "message_id", None)
         if chat_id and message_id:
-            await self._set_reaction(chat_id, message_id, "\U0001f440")
+            await self._call_processing_operation(self._set_reaction, chat_id, message_id, "\U0001f440", metadata=metadata)
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome, metadata=None) -> None:
         """Swap the in-progress reaction for a final success/failure reaction (set_message_reaction
         replaces, not adds); CANCELLED explicitly clears the 👀."""
         if not self._reactions_enabled():
@@ -7155,9 +7155,9 @@ class TelegramAdapter(TelegramHeldInboundMixin, BasePlatformAdapter):
         if not (chat_id and message_id):
             return
         if outcome == ProcessingOutcome.CANCELLED:
-            await self._clear_reactions(chat_id, message_id)
+            await self._call_processing_operation(self._clear_reactions, chat_id, message_id, metadata=metadata)
         else:
-            await self._set_reaction(chat_id, message_id, "\U0001f44d" if outcome == ProcessingOutcome.SUCCESS else "\U0001f44e")
+            await self._call_processing_operation(self._set_reaction, chat_id, message_id, "\U0001f44d" if outcome == ProcessingOutcome.SUCCESS else "\U0001f44e", metadata=metadata)
 
 
 # -- Plugin registration glue: register(ctx) plus the hook implementations (adapter factory, YAML→env/extra

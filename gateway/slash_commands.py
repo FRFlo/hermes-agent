@@ -21,6 +21,7 @@ from typing import Optional, Union
 
 from agent.i18n import t
 from gateway.config import HomeChannel, Platform, PlatformConfig, persist_home_channel
+from gateway.outbound_messages import MessageType, with_message_type
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent
 from gateway.session import AsyncSessionStore
@@ -273,7 +274,7 @@ class GatewaySlashCommandsMixin(
             try:
                 await adapter.send(
                     source.chat_id, confirmation_text, reply_to=event.message_id,
-                    metadata={"is_approval_prompt": True, "force_proactive_send": True})
+                    metadata=with_message_type({"is_approval_prompt": True, "force_proactive_send": True}, MessageType.INTERACTION))
             except Exception as exc:
                 logger.warning("Failed to send /%s confirmation to %s: %s", verb, source.chat_id,
                                exc, exc_info=True)
@@ -878,7 +879,7 @@ class GatewaySlashCommandsMixin(
                 logger.warning("/btw side question failed: %s", e)
                 reply = t("gateway.btw.failed", preview=preview, error=str(e))
             if adapter is not None:
-                await adapter.send(source.chat_id, reply, metadata=_thread_metadata)
+                await adapter.send(source.chat_id, reply, metadata=with_message_type(_thread_metadata, MessageType.REPLY))
 
         self._track_background_task(_run_side_question())
         return t("gateway.btw.started", preview=preview)

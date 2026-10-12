@@ -315,7 +315,9 @@ async def test_approval_boundary_finalize_fails_fallback_send_succeeds(mock_adap
     result = await asyncio.wait_for(boundary_future, timeout=1.0)
 
     assert result is True, "Fallback send succeeded → boundary should be True"
-    mock_adapter.send.assert_awaited_once_with("test_chat", "Pre-approval text")
+    mock_adapter.send.assert_awaited_once_with(
+        "test_chat", "Pre-approval text", metadata={"message_type": "progress"},
+    )
 
     consumer.finish()
     await asyncio.sleep(0.05)

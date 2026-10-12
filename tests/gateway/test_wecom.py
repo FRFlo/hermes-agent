@@ -351,9 +351,43 @@ class TestMediaUpload:
 
 class TestSend:
 
+    @pytest.mark.asyncio
+    async def test_send_voice_sends_caption_and_downgrade_note(self):
+        from plugins.platforms.wecom.adapter import WeComAdapter
 
+        adapter = WeComAdapter(PlatformConfig(enabled=True))
+        adapter._prepare_outbound_media = AsyncMock(
+            return_value={
+                "data": b"voice-bytes",
+                "content_type": "audio/mpeg",
+                "file_name": "voice.mp3",
+                "detected_type": "voice",
+                "final_type": "file",
+                "rejected": False,
+                "reject_reason": None,
+                "downgraded": True,
+                "downgrade_note": "语音格式 audio/mpeg 不支持，企微仅支持 AMR 格式，已转为文件格式发送",
+            }
+        )
+        adapter._upload_media_bytes = AsyncMock(return_value={"media_id": "media-1", "type": "file"})
+        adapter._send_media_message = AsyncMock(return_value={"headers": {"req_id": "req-media"}, "errcode": 0})
+        adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="msg-1"))
 
+        result = await adapter.send_voice("chat-123", "/tmp/voice.mp3", caption="listen")
 
+        assert result.success is True
+        adapter._send_media_message.assert_awaited_once_with("chat-123", "file", "media-1")
+        assert adapter.send.await_count == 2
+        adapter.send.assert_any_await(
+            chat_id="chat-123", content="listen", reply_to=None,
+            metadata={"message_type": "attachment"},
+        )
+        adapter.send.assert_any_await(
+            chat_id="chat-123",
+            content="ℹ️ 语音格式 audio/mpeg 不支持，企微仅支持 AMR 格式，已转为文件格式发送",
+            reply_to=None,
+            metadata={"message_type": "attachment"},
+        )
     @pytest.mark.asyncio
     async def test_approval_confirmation_uses_proactive_send(self):
         """Regression: force_proactive_send=True must use APP_CMD_SEND to avoid

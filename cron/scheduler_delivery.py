@@ -21,6 +21,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
+from gateway.outbound_messages import MessageType, with_message_type
 
 # Log-record parity with the origin module.
 logger = logging.getLogger("cron.scheduler")
@@ -1158,7 +1159,7 @@ def _send_media_via_adapter(
             else:
                 method, path_kw = "send_document", "file_path"
             coro = getattr(adapter, method)(
-                chat_id=chat_id, metadata=metadata, **{path_kw: media_path})
+                chat_id=chat_id, metadata=with_message_type(metadata, MessageType.ATTACHMENT), **{path_kw: media_path})
             future = safe_schedule_threadsafe(coro, loop)
             if future is None:
                 _note_target_error(
@@ -1499,7 +1500,9 @@ def _live_send_text(
             if dispatch["abandoned"]:
                 return None
             dispatch["started"] = True
-        return await router._deliver_to_platform(route_target, text_to_send, route_metadata, transport=t.transport)
+        return await router._deliver_to_platform(
+            route_target, text_to_send, with_message_type(route_metadata, MessageType.NOTIFICATION),
+            transport=t.transport)
 
     future = safe_schedule_threadsafe(_send_once(), t.loop)
     if future is None:

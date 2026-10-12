@@ -21,6 +21,7 @@ from pathlib import Path
 
 from agent.i18n import t
 from gateway.config import Platform
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.run_busy import approval_input_words
@@ -124,7 +125,7 @@ class GatewayInboundMixin(GatewayPluginInjectionMixin):
         else:
             reply = pairing_rate_limited_reply()
         if adapter:
-            await adapter.send(source.chat_id, reply)
+            await adapter.send(source.chat_id, reply, metadata=with_message_type(None, OutboundMessageType.SYSTEM))
         if not code:
             # Record rate limit so subsequent messages are silently ignored
             pairing_store._record_rate_limit(platform_name, source.user_id)
@@ -1508,7 +1509,9 @@ class GatewayInboundMixin(GatewayPluginInjectionMixin):
         """Send each transcript back as ``🎙️ "…"`` (best-effort; failures are logged, never raised)."""
         for tx in transcripts:
             try:
-                await adapter.send(source.chat_id, t("gateway.voice.transcript_echo_short", text=tx), metadata=metadata)
+                await adapter.send(
+                    source.chat_id, t("gateway.voice.transcript_echo_short", text=tx),
+                    metadata=with_message_type(metadata, OutboundMessageType.SYSTEM))
             except Exception as echo_exc:
                 logger.debug("%s echo failed (non-fatal): %s", log_context, echo_exc)
 
@@ -1697,6 +1700,7 @@ class GatewayInboundMixin(GatewayPluginInjectionMixin):
                     await _adapter.send(
                         source.chat_id,
                         "\n".join(_ctx_result.warnings) or t("gateway.notify.context_injection_refused"),
+                        metadata=with_message_type(None, OutboundMessageType.SYSTEM),
                     )
                 return None
             if _ctx_result.expanded:

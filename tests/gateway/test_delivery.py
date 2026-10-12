@@ -127,7 +127,9 @@ async def test_relay_fronted_target_delivers_without_prior_inbound_chat_state(tm
     action, wire_platform = transport.sent[0]
     assert wire_platform == "slack"
     assert action["chat_id"] == "D123"
-    assert action["metadata"] == {"job_id": "cron-1", "user_id": "U123"}
+    assert action["metadata"] == {
+        "job_id": "cron-1", "user_id": "U123", "message_type": "notification",
+    }
     assert action["content"] == content
     saved_files = list(tmp_path.glob("cron/output/cron-1_*.txt"))
     if len(content) > 4000:
@@ -177,7 +179,10 @@ async def test_native_adapter_wins_when_relay_also_fronts_platform(tmp_path, mon
     )
 
     assert native.calls == [
-        {"chat_id": "D123", "content": "native result", "metadata": None}
+        {
+            "chat_id": "D123", "content": "native result",
+            "metadata": {"message_type": "notification"},
+        }
     ]
     assert transport.sent == []
 
@@ -255,6 +260,7 @@ async def test_named_telegram_private_topic_is_created_before_delivery(tmp_path,
             "metadata": {
                 "thread_id": "38049",
                 "telegram_dm_topic_created_for_send": True,
+                "message_type": "notification",
             },
         }
     ]
@@ -281,6 +287,7 @@ async def test_explicit_telegram_private_thread_uses_reply_fallback_with_anchor(
                 "telegram_reply_to_message_id": "9001",
                 "thread_id": "32344",
                 "telegram_dm_topic_reply_fallback": True,
+                "message_type": "notification",
             },
         }
     ]

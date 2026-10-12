@@ -845,7 +845,7 @@ class A2AAdapter(BasePlatformAdapter):
     async def get_chat_info(self, chat_id: str) -> dict[str, Any]:
         return {"name": f"a2a:{chat_id}", "type": "dm"}
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome, metadata=None) -> None:
         """Resolve the task future when processing ends without a reply send (failures,
         cancellations, empty runs, or a reply the gateway already streamed to the user) so the
         HTTP thread returns promptly."""

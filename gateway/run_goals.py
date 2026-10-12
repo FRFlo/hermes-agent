@@ -15,6 +15,7 @@ from contextlib import nullcontext, suppress
 from typing import TYPE_CHECKING, Any, Optional
 
 from gateway.platforms.event import MessageEvent, MessageType
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 
 if TYPE_CHECKING:  # string annotations only; never imported at runtime (cycle)
     from gateway.run import GatewayRunner
@@ -222,7 +223,7 @@ class GatewayGoalsMixin:
         metadata = None
         with suppress(Exception):
             metadata = self._thread_metadata_for_source(source)
-        result = await adapter.send(source.chat_id, message, metadata=metadata)
+        result = await adapter.send(source.chat_id, message, metadata=with_message_type(metadata, OutboundMessageType.PROGRESS))
         if result is not None and not getattr(result, "success", True):
             logger.warning(
                 "goal continuation: status send failed: %s", getattr(result, "error", "unknown error"),

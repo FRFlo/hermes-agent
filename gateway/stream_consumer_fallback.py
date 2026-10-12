@@ -8,6 +8,7 @@ import contextlib
 import logging
 from typing import Any, Callable, Optional
 
+from gateway.outbound_messages import MessageType, with_message_type
 from gateway.platforms.base import BasePlatformAdapter as _BasePlatformAdapter
 from gateway.stream_consumer_fences import ensure_closed_code_fences
 
@@ -324,7 +325,7 @@ class StreamFallbackMixin:
             return
         try:
             # Interim: must never seal a native stream (see _send_commentary).
-            _md = dict(self.metadata) if self.metadata else {}
+            _md = with_message_type(self.metadata, MessageType.PROGRESS)
             _md["_interim_send"] = True
             result = await self.adapter.send(chat_id=self.chat_id, content=tail, metadata=_md)
             if result.success:
@@ -351,7 +352,7 @@ class StreamFallbackMixin:
             # Interim: a stream-is-the-message adapter's seal-interception must not
             # turn this into draft(final=true), which would seal the live stream
             # with interim text and orphan the true final.
-            _md = self._metadata_for_send(final=False) or {}
+            _md = with_message_type(self._metadata_for_send(final=False), MessageType.PROGRESS)
             _md["_interim_send"] = True
             # reply_to only for reply-anchored threading; Discord/Telegram use
             # thread_id metadata and reply_to on every commentary is spam.

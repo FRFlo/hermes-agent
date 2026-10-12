@@ -1081,7 +1081,7 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
     async def send_typing(self, chat_id: str, metadata: Optional[dict[str, Any]] = None) -> None:
         await self._set_typing(chat_id, TYPING_START, "start")
 
-    async def stop_typing(self, chat_id: str) -> None:
+    async def stop_typing(self, chat_id: str, metadata=None) -> None:
         await self._set_typing(chat_id, TYPING_STOP, "stop")
 
     async def send_image(self, chat_id: str, image_url: str, caption: str, reply_to: Optional[str] = None, metadata=None) -> SendResult:
@@ -1201,15 +1201,20 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 async def _deliver_direct(
     adapter: WeixinAdapter, chat_id: str, message: str, media_files: Optional[list[tuple[str, bool]]], context_token: Optional[str],
 ) -> dict[str, Any]:
+    from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
     last_result: Optional[SendResult] = None
     cleaned = adapter.format_message(message)
     if cleaned:
-        last_result = await adapter.send(chat_id, cleaned)
+        last_result = await adapter.send(
+            chat_id, cleaned, metadata=with_message_type(None, OutboundMessageType.NOTIFICATION),
+        )
         if not last_result.success:
             return {"error": f"Weixin send failed: {last_result.error}"}
     for media_path, _is_voice in media_files or []:
         sender = adapter.send_image_file if Path(media_path).suffix.lower() in _DIRECT_IMAGE_EXTS else adapter.send_document
-        last_result = await sender(chat_id, media_path)
+        last_result = await sender(
+            chat_id, media_path, metadata=with_message_type(None, OutboundMessageType.ATTACHMENT),
+        )
         if not last_result.success:
             return {"error": f"Weixin media send failed: {last_result.error}"}
     message_id = last_result.message_id if last_result else None

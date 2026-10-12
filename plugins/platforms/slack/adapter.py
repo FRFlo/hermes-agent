@@ -2430,7 +2430,7 @@ class SlackAdapter(BasePlatformAdapter):
                 message_id, chat_id, api_error or "none", e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
-    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+    async def delete_message(self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None) -> bool:
         """Delete a bot message (used to clean up temporary progress bubbles)."""
         if not self._app:
             return False
@@ -3266,7 +3266,7 @@ class SlackAdapter(BasePlatformAdapter):
         marker = self._workspace_message_marker(team_id, ts) if ts else None
         return (ts, team_id, marker) if ts and marker in self._reacting_message_ids else None
 
-    async def on_processing_start(self, event: MessageEvent) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata=None) -> None:
         """Add an in-progress reaction when message processing begins."""
         target = self._reacting_target(event)
         if target is None:
@@ -3274,9 +3274,9 @@ class SlackAdapter(BasePlatformAdapter):
         ts, team_id, _marker = target
         channel_id = getattr(event.source, "chat_id", None)
         if channel_id:
-            await self._react(channel_id, ts, "eyes", team_id, remove=False)
+            await self._call_processing_operation(self._react, channel_id, ts, "eyes", team_id, remove=False, metadata=metadata)
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome, metadata=None) -> None:
         """Swap the in-progress reaction for a final success/failure reaction."""
         target = self._reacting_target(event)
         if target is None:
@@ -3286,10 +3286,10 @@ class SlackAdapter(BasePlatformAdapter):
         channel_id = getattr(event.source, "chat_id", None)
         if not channel_id:
             return
-        await self._react(channel_id, ts, "eyes", team_id, remove=True)
+        await self._call_processing_operation(self._react, channel_id, ts, "eyes", team_id, remove=True, metadata=metadata)
         final = {ProcessingOutcome.SUCCESS: "white_check_mark", ProcessingOutcome.FAILURE: "x"}
         if outcome in final:
-            await self._react(channel_id, ts, final[outcome], team_id, remove=False)
+            await self._call_processing_operation(self._react, channel_id, ts, final[outcome], team_id, remove=False, metadata=metadata)
 
     # ----- User identity resolution -----
 

@@ -184,6 +184,27 @@ Adapters implement a common interface:
 - `send()` — outbound message delivery
 - inbound events are normalized into a `MessageEvent` and forwarded via `handle_message()`
 
+### Outbound message metadata
+
+Every Gateway-originated send passes a primary semantic category in
+`metadata["message_type"]`. The category describes intent, not presentation; adapters
+remain responsible for rendering and routing it. Platform-specific routing fields and
+other orthogonal context stay alongside it in the same metadata mapping.
+
+| `message_type` | Intent |
+|----------------|--------|
+| `system` | Operational or explanatory system notice |
+| `reply` | A conversational or command response |
+| `progress` | Typing, streaming previews, or in-progress status |
+| `interaction` | A prompt or control requiring a user action |
+| `notification` | A proactive alert, scheduled delivery, or background result |
+| `attachment` | A media/file delivery |
+
+Callers must choose a category explicitly; there is no implicit default. Edits and
+deletions carry the category of the original message, and typing/streaming progress uses
+`progress`; lifecycle-start signals use `progress` and outcome reactions use `interaction`.
+The shared contract and copying helper live in `gateway/outbound_messages.py`.
+
 Internal push wakes use `gateway.wake.admit_internal_event`: the public
 `handle_message()` still returns `None`, but the event's process-local
 `_gateway_accepted` receipt is set only after scheduling or queue insertion.

@@ -200,6 +200,7 @@ async def test_send_home_channel_startup_notification_preserves_thread_metadata(
             "thread_id": "777",
             "telegram_dm_topic_reply_fallback": True,
             "direct_messages_topic_id": "777",
+            "message_type": "notification",
         },
     )
 
@@ -337,7 +338,9 @@ async def test_shutdown_notifications_use_cached_live_thread_source_when_origin_
     chat_id, message = adapter.send.await_args.args
     assert chat_id == "parent-42"
     assert message
-    assert adapter.send.await_args.kwargs == {"metadata": {"thread_id": "topic-7", "_interim_send": True}}
+    assert adapter.send.await_args.kwargs["metadata"] == {
+        "thread_id": "topic-7", "_interim_send": True, "message_type": "system",
+    }
 
 
 @pytest.mark.asyncio

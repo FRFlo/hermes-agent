@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional, cast
 
 from agent.i18n import t
 from gateway.config import Platform, _BUILTIN_PLATFORM_VALUES
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 from gateway.platforms.base import BasePlatformAdapter, _mark_notify_metadata
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.session import SessionEntry, SessionSource, SessionStore
@@ -163,7 +164,11 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
             return _non_conversational_metadata(self.metadata, platform=self.platform)
 
         async def send(self, text: str):
-            return await self.adapter.send(self.chat_id, text, metadata=self.send_metadata())
+            from gateway.outbound_messages import MessageType, with_message_type
+            return await self.adapter.send(
+                self.chat_id, text,
+                metadata=with_message_type(self.send_metadata(), MessageType.NOTIFICATION),
+            )
 
     @dataclasses.dataclass
     class _CompletionClaim:
@@ -200,16 +205,22 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
                 config.get_notice_delivery(source.platform) if config and hasattr(config, "get_notice_delivery")
                 else "public"
             )
-        metadata = self._thread_metadata_for_source(source)
+        metadata = with_message_type(
+            self._thread_metadata_for_source(source), OutboundMessageType.SYSTEM)
         if notice_delivery == "private" and getattr(source, "user_id", None):
             with _log_suppressed(
                 logging.DEBUG, "[%s] send_private_notice failed, falling back to public",
                 getattr(source, "platform", "?"), exc_info=True,
             ):
-                result = await adapter.send_private_notice(source.chat_id, source.user_id, content, metadata=metadata)
+                result = await adapter.send_private_notice(
+                    source.chat_id, source.user_id, content,
+                    metadata=with_message_type(metadata, OutboundMessageType.NOTIFICATION),
+                )
                 if getattr(result, "success", False):
                     return
-        await adapter.send(source.chat_id, content, metadata=metadata)
+        await adapter.send(
+            source.chat_id, content, metadata=with_message_type(metadata, OutboundMessageType.NOTIFICATION),
+        )
 
     async def _deliver_media_from_response(
         self, response: str, event: MessageEvent, adapter, thread_metadata: Optional[dict[str, Any]] = None
@@ -239,10 +250,10 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
             # paths in an already-streamed reply are text the user has seen (or stale inspected content),
             # not an attachment request.
             adapter.extract_images(cleaned)
-            _thread_meta = (
-                dict(thread_metadata)
-                if thread_metadata is not None
-                else self._thread_metadata_for_source(event.source, self._reply_anchor_for_event(event))
+            _thread_meta = with_message_type(
+                thread_metadata if thread_metadata is not None
+                else self._thread_metadata_for_source(event.source, self._reply_anchor_for_event(event)),
+                OutboundMessageType.ATTACHMENT,
             )
             chat_id = event.source.chat_id
             # Images go out as one batch (e.g. Signal's multi-attachment RPC) unless [[as_document]].
@@ -305,8 +316,15 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
                     and not getattr(stream_consumer, "_turn_split_delivery", False)
                 ):
                     try:
+                        from agent.interrupt_compat import _accepts_keyword
+                        edit_kwargs = {}
+                        if _accepts_keyword(adapter.edit_message, "metadata"):
+                            edit_kwargs["metadata"] = with_message_type(
+                                getattr(stream_consumer, "metadata", None), OutboundMessageType.PROGRESS,
+                            )
                         _edit_res = await adapter.edit_message(
                             chat_id=source.chat_id, message_id=_sc_msg_id, content=text_content, finalize=True,
+                            **edit_kwargs,
                         )
                         if getattr(_edit_res, "success", False):
                             _reconciled = True
@@ -364,9 +382,9 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
         if session_key and isinstance(adapter, BasePlatformAdapter):
             result, _ = await adapter.send_final_ledgered(
                 MessageEvent(text="", source=source, ledger_message_id=inbound_message_id),
-                session_key, text_content, _mark_notify_metadata(metadata), reply_to=event_message_id)
+                session_key, text_content, with_message_type(_mark_notify_metadata(metadata), OutboundMessageType.REPLY), reply_to=event_message_id)
         else:
-            result = await adapter.send(source.chat_id, text_content, metadata=metadata)
+            result = await adapter.send(source.chat_id, text_content, metadata=with_message_type(metadata, OutboundMessageType.REPLY))
         if not getattr(result, "success", False):
             logger.warning(
                 "Queued-lane final send to %s failed: %s", getattr(source, "chat_id", "?"),
@@ -504,7 +522,8 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
             with _log_suppressed(logging.DEBUG, "Button-based update prompt failed: %s"):
                 await adapter.send_update_prompt(
                     chat_id=target.chat_id, prompt=prompt_text, default=default,
-                    session_key=target.session_key, metadata=target.send_metadata(),
+                    session_key=target.session_key,
+                    metadata=with_message_type(target.send_metadata(), OutboundMessageType.INTERACTION),
                 )
                 sent_buttons = True
         if not sent_buttons:
@@ -658,7 +677,11 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
                     msg = _update_failed_notice()
                     if output:
                         msg = t("gateway.update.last_lines", msg=msg, tail=_update_output_tail(output, 800))
-                await adapter.send(chat_id, msg, metadata=_non_conversational_metadata(metadata, platform=platform))
+                await adapter.send(
+                    chat_id, msg,
+                    metadata=with_message_type(
+                        _non_conversational_metadata(metadata, platform=platform),
+                        OutboundMessageType.SYSTEM))
                 logger.info("Sent post-update notification to %s:%s (exit=%s)", platform_str, chat_id, exit_code)
         except Exception as e:
             logger.warning("Post-update notification failed: %s", e)
@@ -704,7 +727,7 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
                         metadata[field] = str(data[field])
             result = await transport.send(
                 platform, str(chat_id), t("gateway.startup.restarted"),
-                metadata=_non_conversational_metadata(metadata, platform=platform),
+                metadata=with_message_type(_non_conversational_metadata(metadata, platform=platform), OutboundMessageType.SYSTEM),
             )
             # adapter.send() catches provider errors (e.g. "Chat not found") and returns
             # SendResult(success=False) rather than raising, so inspect the result before claiming success.
@@ -773,11 +796,14 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
                     metadata["user_id"] = home.user_id
                 if home.scope_id:
                     metadata["scope_id"] = home.scope_id
-            send_metadata = _non_conversational_metadata(metadata, platform=platform)
+            send_metadata = with_message_type(_non_conversational_metadata(metadata, platform=platform), OutboundMessageType.NOTIFICATION)
             if send_metadata is not None or transport.is_relay:
                 result = await transport.send(platform, str(home.chat_id), message, metadata=send_metadata)
             else:
-                result = await transport.adapter.send(str(home.chat_id), message)
+                result = await transport.adapter.send(
+                    str(home.chat_id), message,
+                    metadata=with_message_type(metadata, OutboundMessageType.NOTIFICATION),
+                )
             if _send_failed(result):
                 logger.warning(failure_fmt, platform.value, home.chat_id, _send_error(result))
                 return False
@@ -1879,7 +1905,7 @@ class GatewayNotificationsMixin(GatewayNotificationOwnershipMixin):
             with _log_suppressed(logging.ERROR, "Watcher delivery error: %s"):
                 send_meta = {"thread_id": thread_id} if thread_id else None
                 await adapter.send(
-                    chat_id, message_text, metadata=_non_conversational_metadata(send_meta, platform=platform_name),
+                    chat_id, message_text, metadata=with_message_type(_non_conversational_metadata(send_meta, platform=platform_name), OutboundMessageType.NOTIFICATION),
                 )
 
     @staticmethod

@@ -9,6 +9,8 @@ in ``kanban_watchers_common``.
 
 from __future__ import annotations
 
+from gateway.outbound_messages import MessageType, with_message_type
+
 import asyncio
 import os
 import time
@@ -194,15 +196,21 @@ class GatewayKanbanWatchersMixin:
         if image_paths:
             try:
                 batch = [(f"file://{_quote(p)}", "") for p in image_paths]
-                await adapter.send_multiple_images(chat_id=chat_id, images=batch, metadata=metadata)
+                await adapter.send_multiple_images(
+                    chat_id=chat_id, images=batch, metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+                )
             except Exception as exc:
                 logger.warning("kanban notifier: image batch upload failed: %s", exc)
         for path in other_paths:
             try:
                 if Path(path).suffix.lower() in _VIDEO_EXTS:
-                    await adapter.send_video(chat_id=chat_id, video_path=path, metadata=metadata)
+                    await adapter.send_video(
+                        chat_id=chat_id, video_path=path, metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+                    )
                 else:
-                    await adapter.send_document(chat_id=chat_id, file_path=path, metadata=metadata)
+                    await adapter.send_document(
+                        chat_id=chat_id, file_path=path, metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+                    )
             except Exception as exc:
                 logger.warning("kanban notifier: artifact upload (%s) failed: %s", path, exc)
 

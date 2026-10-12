@@ -25,6 +25,7 @@ from gateway.platforms.base import (
     BasePlatformAdapter, ExecApprovalPrompt, SendResult,
 )
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 from agent.i18n import t
 from gateway.relay.descriptor import CapabilityDescriptor
 from gateway.relay.egress import (
@@ -1639,7 +1640,9 @@ class RelayAdapter(BasePlatformAdapter):
             raw_response=result,
         )
 
-    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+    async def delete_message(
+        self, chat_id: str, message_id: str, *, metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Delete a relayed message (the stream consumer's fresh-final cleanup). Gated
         on the descriptor advertising ``delete``: older connectors return False so
         cleanup degrades to leaving the preview in place."""
@@ -1654,7 +1657,7 @@ class RelayAdapter(BasePlatformAdapter):
                     "op": "delete",
                     "chat_id": chat_id,
                     "message_id": message_id,
-                    "metadata": self._with_scope(chat_id, {}),
+                    "metadata": self._with_scope(chat_id, metadata),
                 },
             )
         except Exception:
@@ -2296,6 +2299,7 @@ class RelayAdapter(BasePlatformAdapter):
         emoji: str,
         *,
         remove: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Egress one `react` op; best-effort (False on any failure, logged at debug)."""
         if not chat_id or not message_id:
@@ -2308,31 +2312,35 @@ class RelayAdapter(BasePlatformAdapter):
                 "message_id": message_id,
                 "emoji": emoji,
                 "remove": remove,
-                "metadata": self._with_scope(chat_id, None),
+                "metadata": self._with_scope(chat_id, metadata),
             },
             decline_level=None,
         )
         return result is not None
 
-    async def on_processing_start(self, event) -> None:
+    async def on_processing_start(self, event, metadata=None) -> None:
         """Add the in-progress reaction (op-gated; silent no-op otherwise)."""
         message_id, chat_id = _event_ids(event)
         if message_id and chat_id:
             eyes, _ok, _fail = self._ack_emoji(event, chat_id)
-            await self._react(str(chat_id), str(message_id), eyes)
+            await self._react(
+                str(chat_id), str(message_id), eyes,
+                metadata=with_message_type(metadata, OutboundMessageType.PROGRESS),
+            )
 
-    async def on_processing_complete(self, event, outcome) -> None:
+    async def on_processing_complete(self, event, outcome, metadata=None) -> None:
         """Swap the in-progress reaction for the outcome one (op-gated; silent
         no-op otherwise)."""
         message_id, chat_id = _event_ids(event)
         if not (message_id and chat_id):
             return
         eyes, ok_emoji, fail_emoji = self._ack_emoji(event, chat_id)
-        await self._react(str(chat_id), str(message_id), eyes, remove=True)
+        metadata = with_message_type(metadata, OutboundMessageType.INTERACTION)
+        await self._react(str(chat_id), str(message_id), eyes, remove=True, metadata=metadata)
         if outcome == ProcessingOutcome.SUCCESS:
-            await self._react(str(chat_id), str(message_id), ok_emoji)
+            await self._react(str(chat_id), str(message_id), ok_emoji, metadata=metadata)
         elif outcome == ProcessingOutcome.FAILURE:
-            await self._react(str(chat_id), str(message_id), fail_emoji)
+            await self._react(str(chat_id), str(message_id), fail_emoji, metadata=metadata)
 
     # ── Phase 4 thread lifecycle ──────────────────────────────────────────
 

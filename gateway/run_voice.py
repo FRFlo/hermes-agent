@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 from agent.i18n import t
 from gateway.config import Platform
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 from gateway.platforms.base import build_auto_tts_output_path
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.session import SessionSource
@@ -453,4 +454,4 @@ class GatewayVoiceMixin:
         thread_meta["notify"] = True
         for path in audio_paths:
             await send_voice(chat_id=event.source.chat_id, audio_path=path, reply_to=reply_anchor,
-                             metadata=thread_meta)
+                             metadata=with_message_type(thread_meta, OutboundMessageType.ATTACHMENT))

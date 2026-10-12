@@ -461,7 +461,11 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         ``cl:<clarify_id>:<idx|other>``; inbound dispatches on it."""
         question = (question or "").strip()
         if not choices:
-            return await self.send(chat_id, f"❓ {question}", reply_to=_reply_to_from(metadata))
+            from gateway.outbound_messages import MessageType, with_message_type
+            return await self.send(
+                chat_id, f"❓ {question}", reply_to=_reply_to_from(metadata),
+                metadata=with_message_type(metadata, MessageType.INTERACTION),
+            )
         # Full choice text goes in the body so long options aren't lost to the
         # 20-char label cap; labels are just the option number.
         choices_list = [str(c).strip() for c in choices[:10] if str(c).strip()]
@@ -849,7 +853,8 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
 
     async def _reply_best_effort(self, to: str, text: str, fail_log: str) -> None:
         try:
-            await self.send(to, text)
+            from gateway.outbound_messages import MessageType, with_message_type
+            await self.send(to, text, metadata=with_message_type(None, MessageType.REPLY))
         except Exception:
             logger.exception(fail_log)
 

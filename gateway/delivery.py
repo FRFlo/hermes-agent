@@ -13,6 +13,7 @@ from hermes_cli.config import get_hermes_home
 from .config import Platform, GatewayConfig, PlatformConfig
 from .session import SessionSource
 from .dead_targets import DeadTargetRegistry, classify_dead_error
+from .outbound_messages import MessageType, with_message_type
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +320,10 @@ class DeliveryRouter:
                     send_metadata["telegram_dm_topic_reply_fallback"] = True
 
         for retry in (False, True):
-            result = await transport.send(target.platform, target.chat_id, content, metadata=send_metadata or None)
+            result = await transport.send(
+                target.platform, target.chat_id, content,
+                metadata=with_message_type(send_metadata, MessageType.NOTIFICATION),
+            )
             error = _send_result_error(result)
             if retry or error is None or not named_topic or "thread not found" not in error.lower():
                 break

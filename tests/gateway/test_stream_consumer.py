@@ -10,6 +10,36 @@ from agent.think_scrubber import THINK_TAG_NAMES
 from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig
 
 
+def test_stream_send_metadata_carries_original_reply_anchor():
+    consumer = GatewayStreamConsumer(
+        adapter=MagicMock(),
+        chat_id="123",
+        initial_reply_to_id="456",
+    )
+
+    assert consumer._metadata_for_send(final=False) == {
+        "reply_to_message_id": "456",
+        "message_type": "progress",
+    }
+    assert consumer._metadata_for_send(final=True) == {
+        "reply_to_message_id": "456",
+        "notify": True,
+        "message_type": "reply",
+    }
+
+
+def test_stream_metadata_preserves_adapter_context_when_categorized():
+    consumer = GatewayStreamConsumer(
+        adapter=MagicMock(),
+        chat_id="123",
+        metadata={"thread_id": "thread-1", "adapter_hint": "native"},
+    )
+
+    assert consumer._metadata_for_send(final=False) == {
+        "thread_id": "thread-1",
+        "adapter_hint": "native",
+        "message_type": "progress",
+    }
 
 
 # ── _clean_for_display unit tests ────────────────────────────────────────
@@ -106,6 +136,7 @@ class TestFinalizeCapabilityGate:
         # Finalize edit must go through even on identical content.
         picky.edit_message.assert_called_once()
         assert picky.edit_message.call_args[1]["finalize"] is True
+        assert picky.edit_message.call_args[1]["metadata"]["message_type"] == "progress"
 
 
 class TestEditMessageFinalizeSignature:
@@ -499,7 +530,9 @@ class TestSegmentBreakOnToolBoundary:
 
         await consumer._send_fallback_final("Working on it. Done!")
 
-        adapter.delete_message.assert_awaited_once_with("chat_123", "msg_partial")
+        adapter.delete_message.assert_awaited_once_with(
+            "chat_123", "msg_partial", metadata={"message_type": "progress"},
+        )
         assert consumer._final_response_sent is True
 
     @pytest.mark.asyncio

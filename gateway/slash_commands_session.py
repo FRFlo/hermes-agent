@@ -17,6 +17,7 @@ from typing import Optional, Union
 from agent.i18n import t
 from agent.turn_context import extract_api_content_sidecar
 from gateway.config import Platform
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 from gateway.platforms.base import EphemeralReply
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.session import SessionSource, build_session_key, is_shared_multi_user_session
@@ -764,7 +765,8 @@ class GatewaySessionCommandsMixin:
             if not adapter:
                 return t("gateway.save.no_adapter")
             await adapter.send_document(chat_id=source.chat_id, file_path=temp_path,
-                                        caption=t("gateway.save.caption", filename=filename), file_name=filename)
+                                        caption=t("gateway.save.caption", filename=filename), file_name=filename,
+                                        metadata=with_message_type(None, OutboundMessageType.ATTACHMENT))
             return t("gateway.save.complete")
         except Exception as e:
             logger.warning("Session /save failed: %s", e)

@@ -7,6 +7,8 @@ so ``patch("gateway.run.X")`` keeps intercepting them at call time.
 
 from __future__ import annotations
 
+from gateway.outbound_messages import MessageType, with_message_type
+
 import asyncio
 import dataclasses
 import json
@@ -1010,6 +1012,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
         from gateway.run import _interim_metadata
         kw["metadata"] = _interim_metadata(kw.get("metadata"))
         try:
+            kw["metadata"] = with_message_type(kw.get("metadata"), MessageType.SYSTEM)
             result = await adapter.send(chat_id, msg, **kw)
         except Exception as e:
             logger.debug(raise_fmt or fail_fmt, platform_str, chat_id, e)

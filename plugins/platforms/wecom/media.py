@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 
 from agent.i18n import t
 from gateway.platforms.base import SendResult, cache_document_from_bytes_async, cache_image_from_bytes_async
+from gateway.outbound_messages import MessageType, with_message_type
 
 logger = logging.getLogger("plugins.platforms.wecom.adapter")
 
@@ -288,15 +289,24 @@ class WeComMediaMixin:
     async def _send_media_message(self, chat_id: str, media_type: str, media_id: str) -> dict[str, Any]:
         return await self._checked_request(APP_CMD_SEND, {"chatid": chat_id, **_media_body(media_type, media_id)}, "send media message")
 
-    async def _send_followup_markdown(self, chat_id: str, content: str, reply_to: Optional[str] = None) -> Optional[SendResult]:
+    async def _send_followup_markdown(
+        self, chat_id: str, content: str, reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[SendResult]:
         if not content:
             return None
-        result = await self.send(chat_id=chat_id, content=content, reply_to=reply_to)
+        result = await self.send(
+            chat_id=chat_id, content=content, reply_to=reply_to, metadata=metadata,
+        )
         if not result.success:
             logger.warning("[%s] Follow-up markdown send failed: %s", self.name, result.error)
         return result
 
-    async def _send_media_source(self, chat_id: str, media_source: str, caption: Optional[str] = None, file_name: Optional[str] = None, reply_to: Optional[str] = None) -> SendResult:
+    async def _send_media_source(
+        self, chat_id: str, media_source: str, caption: Optional[str] = None,
+        file_name: Optional[str] = None, reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
         if not chat_id:
             return SendResult(success=False, error="chat_id is required")
         try:
@@ -308,7 +318,10 @@ class WeComMediaMixin:
         if prepared["rejected"]:
             text = self.warning_text(f"⚠️ {prepared['reject_reason']}", caption or "")
             if text:
-                await self._send_followup_markdown(chat_id, text, reply_to=reply_to)
+                await self._send_followup_markdown(
+                    chat_id, text, reply_to=reply_to,
+                    metadata=with_message_type(metadata, MessageType.SYSTEM),
+                )
             return SendResult(success=False, error=prepared["reject_reason"])
         reply_req_id = self._cached_reply_req_id(chat_id, reply_to)
         # Active/expired stream owns the req_id (passive replyMedia is never acked): go proactive.
@@ -332,27 +345,35 @@ class WeComMediaMixin:
         raw: dict[str, Any] = {"upload": upload_result, "media": media_response}
         downgrade = self.warning_text(f"ℹ️ {prepared['downgrade_note']}") if prepared["downgraded"] and prepared["downgrade_note"] else None
         for key, text in (("caption", caption), ("downgrade", downgrade or None)):
-            followup = await self._send_followup_markdown(chat_id, text, reply_to=reply_to) if text else None
+            followup = await self._send_followup_markdown(
+                chat_id, text, reply_to=reply_to,
+                metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+            ) if text else None
             raw[key] = followup.raw_response if followup else None
             raw[f"{key}_error"] = followup.error if followup and not followup.success else None
         return SendResult(success=True, message_id=self._payload_req_id(media_response) or uuid.uuid4().hex[:12], raw_response=raw)
 
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None, reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
-        result = await self._send_media_source(chat_id=chat_id, media_source=image_url, caption=caption, reply_to=reply_to)
+        result = await self._send_media_source(
+            chat_id=chat_id, media_source=image_url, caption=caption, reply_to=reply_to, metadata=metadata,
+        )
         if result.success or not self._looks_like_url(image_url):
             return result
         logger.warning("[%s] Falling back to text send for image URL %s: %s", self.name, image_url, result.error)
-        return await self.send(chat_id=chat_id, content=f"{caption}\n{image_url}" if caption else image_url, reply_to=reply_to)
+        return await self.send(
+            chat_id=chat_id, content=f"{caption}\n{image_url}" if caption else image_url,
+            reply_to=reply_to, metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+        )
 
     async def send_image_file(self, chat_id: str, image_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
-        return await self._send_media_source(chat_id=chat_id, media_source=image_path, caption=caption, reply_to=reply_to)
+        return await self._send_media_source(chat_id=chat_id, media_source=image_path, caption=caption, reply_to=reply_to, metadata=kwargs.get("metadata"))
 
     async def send_document(self, chat_id: str, file_path: str, caption: Optional[str] = None, file_name: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
         logger.info("[%s] send_document called: chat=%s file=%s", self.name, chat_id, file_path)
-        return await self._send_media_source(chat_id=chat_id, media_source=file_path, caption=caption, file_name=file_name, reply_to=reply_to)
+        return await self._send_media_source(chat_id=chat_id, media_source=file_path, caption=caption, file_name=file_name, reply_to=reply_to, metadata=kwargs.get("metadata"))
 
     async def send_voice(self, chat_id: str, audio_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
-        return await self._send_media_source(chat_id=chat_id, media_source=audio_path, caption=caption, reply_to=reply_to)
+        return await self._send_media_source(chat_id=chat_id, media_source=audio_path, caption=caption, reply_to=reply_to, metadata=kwargs.get("metadata"))
 
     async def send_video(self, chat_id: str, video_path: str, caption: Optional[str] = None, reply_to: Optional[str] = None, **kwargs) -> SendResult:
-        return await self._send_media_source(chat_id=chat_id, media_source=video_path, caption=caption, reply_to=reply_to)
+        return await self._send_media_source(chat_id=chat_id, media_source=video_path, caption=caption, reply_to=reply_to, metadata=kwargs.get("metadata"))

@@ -3228,26 +3228,26 @@ class DiscordAdapter(DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceIn
         """Reactions enabled via ``extra.reactions`` (YAML, per profile) or ``DISCORD_REACTIONS``."""
         return self._extra_or_env_flag("reactions", "DISCORD_REACTIONS", "true", truthy=False)
 
-    async def on_processing_start(self, event: MessageEvent) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Add an in-progress reaction and record durable handling state."""
         message = event.raw_message
         acked = False
         if self._reactions_enabled() and hasattr(message, "add_reaction"):
-            acked = await self._add_reaction(message, "👀")
+            acked = await self._call_processing_operation(self._add_reaction, message, "👀", metadata=metadata)
         await asyncio.to_thread(self._record_discord_processing_start, event, emoji_ack=acked)
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome, metadata: Optional[Dict[str, Any]] = None) -> None:
         """Swap the in-progress reaction for final reaction and durable state."""
         await asyncio.to_thread(self._record_discord_processing_complete, event, outcome)
         if not self._reactions_enabled():
             return
         message = event.raw_message
         if hasattr(message, "add_reaction"):
-            await self._remove_reaction(message, "👀")
+            await self._call_processing_operation(self._remove_reaction, message, "👀", metadata=metadata)
             if outcome == ProcessingOutcome.SUCCESS:
-                await self._add_reaction(message, "✅")
+                await self._call_processing_operation(self._add_reaction, message, "✅", metadata=metadata)
             elif outcome == ProcessingOutcome.FAILURE:
-                await self._add_reaction(message, "❌")
+                await self._call_processing_operation(self._add_reaction, message, "❌", metadata=metadata)
 
     @staticmethod
     def _message_reference_from_ids(message_id, channel) -> discord.MessageReference:
@@ -4417,7 +4417,7 @@ class DiscordAdapter(DiscordMediaMixin, DiscordThreadTitlesMixin, DiscordVoiceIn
                 self._typing_tasks.pop(chat_id, None)
         self._typing_tasks[chat_id] = asyncio.create_task(_typing_loop())
 
-    async def stop_typing(self, chat_id: str) -> None:
+    async def stop_typing(self, chat_id: str, metadata=None) -> None:
         """Stop the persistent typing indicator for a channel."""
         task = self._typing_tasks.pop(chat_id, None)
         if task:

@@ -33,6 +33,7 @@ from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.platforms.helpers import redact_phone
 from gateway.platforms.helpers import cancel_task
 from gateway.platforms.media_cache import mime_for_ext
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
 from tools.audio_container import CONTAINER_TO_EXT, sniff_container
 from gateway.platforms.signal_format import markdown_to_signal
 from gateway.platforms.signal_rate_limit import (
@@ -859,7 +860,8 @@ class SignalAdapter(BasePlatformAdapter):
         try:
             await self.emit_warning(chat_id, t(
                 "platform.signal.batch_pacing_notice",
-                wait=_format_wait(wait_s), batch=next_batch_idx, total=total_batches))
+                wait=_format_wait(wait_s), batch=next_batch_idx, total=total_batches),
+                metadata=with_message_type(None, OutboundMessageType.SYSTEM))
         except Exception as e:
             logger.warning("Signal: failed to send pacing notice: %s", e)
 
@@ -920,7 +922,7 @@ class SignalAdapter(BasePlatformAdapter):
         self._typing_failures.pop(chat_id, None)
         self._typing_skip_until.pop(chat_id, None)
 
-    async def stop_typing(self, chat_id: str) -> None:
+    async def stop_typing(self, chat_id: str, metadata=None) -> None:
         """Public stop-typing hook called from the base adapter's _keep_typing finally block."""
         await self._stop_typing_indicator(chat_id)
 
@@ -958,20 +960,21 @@ class SignalAdapter(BasePlatformAdapter):
         sender = getattr(getattr(event, "source", None), "user_id", None) if event is not None else None
         return not (sender and "*" not in self.dm_allow_from and sender not in self.dm_allow_from)
 
-    async def on_processing_start(self, event: MessageEvent) -> None:
+    async def on_processing_start(self, event: MessageEvent, metadata=None) -> None:
         """React with 👀 when processing begins."""
         if self._reactions_enabled(event) and (target := self._extract_reaction_target(event)):
-            await self.send_reaction(event.source.chat_id, "👀", *target)
+            await self._call_processing_operation(self.send_reaction, event.source.chat_id, "👀", *target, metadata=metadata)
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+    async def on_processing_complete(self, event: MessageEvent, outcome: "ProcessingOutcome", metadata=None) -> None:
         """Swap 👀 for ✅/❌; on CANCELLED the 👀 stays to keep reflecting "in progress" (matches Telegram)."""
         if outcome == ProcessingOutcome.CANCELLED or not self._reactions_enabled(event):
             return
         if not (target := self._extract_reaction_target(event)):
             return
-        await self.remove_reaction(event.source.chat_id, *target)
+        metadata = with_message_type(metadata, OutboundMessageType.INTERACTION)
+        await self._call_processing_operation(self.remove_reaction, event.source.chat_id, *target, metadata=metadata)
         if emoji := _OUTCOME_REACTION.get(outcome):
-            await self.send_reaction(event.source.chat_id, emoji, *target)
+            await self._call_processing_operation(self.send_reaction, event.source.chat_id, emoji, *target, metadata=metadata)
 
     async def get_chat_info(self, chat_id: str) -> dict[str, Any]:
         """Get information about a chat/contact."""

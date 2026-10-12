@@ -910,8 +910,12 @@ class EmailAdapter(BasePlatformAdapter):
 
     async def send_image(self, chat_id: str, image_url: str, caption: Optional[str] = None,
                          reply_to: Optional[str] = None, metadata: Optional[dict[str, Any]] = None) -> SendResult:
-        """Send an image URL as part of an email body (``metadata`` unused)."""
-        return await self.send(chat_id, f"{caption or ''}\n\nImage: {image_url}".strip(), reply_to)
+        """Send an image URL as part of an email body."""
+        from gateway.outbound_messages import MessageType, with_message_type
+        return await self.send(
+            chat_id, f"{caption or ''}\n\nImage: {image_url}".strip(), reply_to,
+            metadata=with_message_type(metadata, MessageType.ATTACHMENT),
+        )
 
     async def send_multiple_images(self, chat_id: str, images: list[tuple[str, str]],
                                    metadata: Optional[dict[str, Any]] = None, human_delay: float = 0.0) -> SendResult:

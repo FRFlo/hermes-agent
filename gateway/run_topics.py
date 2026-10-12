@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from gateway.outbound_messages import MessageType, with_message_type
+
 import asyncio
 import json
 import logging
@@ -229,7 +231,9 @@ class GatewayTopicThreadsMixin:
             return
         try:
             send_result = await adapter.send(
-                source.chat_id, t("gateway.topic.system_topic_intro"), metadata={"thread_id": str(thread_id)},
+                source.chat_id, t("gateway.topic.system_topic_intro"),
+                # The category communicates intent without changing localized presentation.
+                metadata=with_message_type({"thread_id": str(thread_id)}, MessageType.SYSTEM),
             )
             message_id = getattr(send_result, "message_id", None)
         except Exception:
@@ -252,7 +256,9 @@ class GatewayTopicThreadsMixin:
         try:
             await adapter.send_image_file(
                 chat_id=source.chat_id, image_path=str(image_path), caption=t("gateway.topic.setup_image_caption"),
-                metadata={"thread_id": str(source.thread_id)} if source.thread_id else None,
+                metadata=with_message_type(
+                    {"thread_id": str(source.thread_id)} if source.thread_id else None, MessageType.ATTACHMENT,
+                ),
             )
         except Exception:
             logger.debug("Failed to send Telegram topic setup image", exc_info=True)

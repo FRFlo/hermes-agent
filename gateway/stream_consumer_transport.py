@@ -12,6 +12,7 @@ import time
 from typing import Any, Optional
 
 from gateway.platforms.base import BasePlatformAdapter as _BasePlatformAdapter
+from gateway.outbound_messages import MessageType, with_message_type
 from gateway.stream_consumer_fences import ensure_closed_code_fences
 from hermes_cli.observability.shared_metrics_gateway import stops_reply_clock
 
@@ -33,22 +34,20 @@ class StreamTransportMixin:
         # Contract: adapters must accept finalize= even when False (test-guarded).
         kwargs = dict(chat_id=self.chat_id, message_id=message_id, content=content,
                       finalize=finalize)
-        if self.metadata:
-            try:
-                params = inspect.signature(self.adapter.edit_message).parameters
-                if "metadata" in params or any(
-                    param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()):
-                    kwargs["metadata"] = self.metadata
-            except (TypeError, ValueError):
-                pass
+        try:
+            params = inspect.signature(self.adapter.edit_message).parameters
+            if "metadata" in params or any(
+                param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()):
+                kwargs["metadata"] = with_message_type(self.metadata, MessageType.PROGRESS)
+        except (TypeError, ValueError):
+            pass
         return await self.adapter.edit_message(**kwargs)
 
     async def _try_seed_frame(self, fail_log: str, *, exc_info: bool = False) -> bool:
         """Open a native stream with an empty seed frame (typing indicator before any token) as a
         bool; a raise logs ``fail_log`` at DEBUG (error formatted in, or the traceback when
         ``exc_info``) and reads as False."""
-        seed = self.adapter.send_stream_frame(
-            "", chat_id=self.chat_id, reply_to=self._initial_reply_to_id, turn_id=self._turn_id)
+        seed = self._send_frame("", finalize=False)
         return await self._try_frame(seed, fail_log, exc_info=exc_info)
 
     @staticmethod
@@ -65,9 +64,22 @@ class StreamTransportMixin:
 
     async def _send_frame(self, text: str, *, finalize: bool):
         """One native-stream frame; every frame carries the same chat/reply/turn routing."""
-        return await self.adapter.send_stream_frame(
-            text, finalize=finalize, chat_id=self.chat_id, reply_to=self._initial_reply_to_id,
-            turn_id=self._turn_id)
+        return await self._send_frame(text, finalize=finalize)
+
+    def _send_frame(self, text: str, *, finalize: bool):
+        """Send a frame with progress metadata when the adapter supports the keyword."""
+        kwargs = dict(
+            finalize=finalize, chat_id=self.chat_id, reply_to=self._initial_reply_to_id,
+            turn_id=self._turn_id,
+        )
+        try:
+            params = inspect.signature(self.adapter.send_stream_frame).parameters
+            if "metadata" in params or any(
+                param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()):
+                kwargs["metadata"] = with_message_type(self.metadata, MessageType.PROGRESS)
+        except (TypeError, ValueError):
+            pass
+        return self.adapter.send_stream_frame(text, **kwargs)
 
     def _close_native_state(self) -> None:
         """Mark the native stream closed (next content re-seeds or falls back)."""
@@ -93,7 +105,7 @@ class StreamTransportMixin:
         md = dict(self.metadata) if self.metadata else {}
         if self._initial_reply_to_id:
             md.setdefault("reply_to_message_id", self._initial_reply_to_id)
-        return md or None
+        return with_message_type(md, MessageType.PROGRESS)
 
     def _stale_preview_ids(self, *, segment_only: bool = False) -> set:
         """Preview ids a fresh final replaces; ``segment_only`` spares finalized preambles."""
@@ -113,14 +125,23 @@ class StreamTransportMixin:
             if not stale_id or stale_id == skip or (skip_sentinel and stale_id == "__no_edit__"):
                 continue
             try:
-                deleted = await delete_fn(self.chat_id, stale_id)
+                metadata = with_message_type(self.metadata, MessageType.PROGRESS)
+                kwargs = {}
+                try:
+                    params = inspect.signature(delete_fn).parameters
+                    if "metadata" in params or any(
+                        param.kind is inspect.Parameter.VAR_KEYWORD for param in params.values()):
+                        kwargs["metadata"] = metadata
+                except (TypeError, ValueError):
+                    pass
+                deleted = await delete_fn(self.chat_id, stale_id, **kwargs)
                 if retry_on_false and deleted is False:
                     # Telegram's delete_message reports failure by returning False, not raising. The same
                     # flood window that broke the finalize edit can reject this delete too, leaving the
                     # preview bubble next to the fresh final (#71047 Problem B). One short bounded retry
                     # clears the common transient case; a second failure stays best-effort.
                     await asyncio.sleep(1.0)
-                    await delete_fn(self.chat_id, stale_id)
+                    await delete_fn(self.chat_id, stale_id, **kwargs)
             except Exception as e:
                 logger.debug("%s preview cleanup failed (%s): %s", label, stale_id, e)
 

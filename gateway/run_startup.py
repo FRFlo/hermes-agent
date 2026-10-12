@@ -7,6 +7,8 @@ so ``patch("gateway.run.X")`` keeps intercepting them at call time.
 
 from __future__ import annotations
 
+from gateway.outbound_messages import MessageType as OutboundMessageType, with_message_type
+
 import asyncio
 import dataclasses
 import faulthandler
@@ -467,7 +469,10 @@ class GatewayStartupMixin:
                 content = row.get("marker", RECOVERED_MARKER) + content
             metadata = {"thread_id": row["thread_id"]} if row.get("thread_id") else None
             try:
-                result = await adapter.send(chat_id=row["chat_id"], content=content, metadata=metadata)
+                result = await adapter.send(
+                    chat_id=row["chat_id"], content=content,
+                    metadata=with_message_type(metadata, OutboundMessageType.REPLY),
+                )
             except Exception as send_err:
                 logger.warning("obligation %s: redelivery send raised: %s", row["obligation_id"], send_err)
                 result = None
@@ -1868,7 +1873,10 @@ class GatewayStartupMixin:
             return
         # Reply into the new thread (else the home channel) via the resolved transport, so a relay-fronted
         # logical platform is stamped on the outbound frame.
-        send_metadata = {"thread_id": dest.effective_thread_id} if dest.effective_thread_id else None
+        send_metadata = with_message_type(
+            {"thread_id": dest.effective_thread_id} if dest.effective_thread_id else None,
+            OutboundMessageType.REPLY,
+        )
         try:
             result = await dest.transport.send(
                 dest.platform, str(dest.home.chat_id), response_text, send_metadata,
